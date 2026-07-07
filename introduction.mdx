@@ -1,0 +1,74 @@
+---
+title: "Tienda Mi Cholo S.A.C: Retail POS & Inventory System"
+sidebarTitle: "Introduction"
+description: "Tienda Mi Cholo S.A.C is an ASP.NET Core MVC point-of-sale system with role-based access, receipt generation, and real-time inventory management."
+---
+
+Tienda Mi Cholo S.A.C is a full-stack point-of-sale and inventory management system built with **ASP.NET Core MVC on .NET 10**, backed by **Entity Framework Core 10** and **SQL Server**. Designed for small to mid-size retail stores, it combines a responsive **Bootstrap 5** interface with a secure, cookie-based authentication model to give store staff everything they need — from ringing up sales and printing receipts to managing stock levels and tracking clients — all in a single, self-hosted web application.
+
+## What's Included
+
+<CardGroup cols={2}>
+  <Card title="Dashboard" icon="gauge-high" href="/features/dashboard">
+    A real-time overview of today's sales totals, low-stock alerts, and recent transaction history to keep management informed at a glance.
+  </Card>
+  <Card title="Sales (Ventas)" icon="receipt" href="/features/sales-overview">
+    Process new sales, issue Boletas and Facturas, apply client lookups, and manage the full transaction lifecycle from cart to receipt.
+  </Card>
+  <Card title="Products (Productos)" icon="box-open" href="/features/products">
+    Add, edit, and deactivate products with category assignment, unit pricing, and stock quantity tracking across six built-in categories.
+  </Card>
+  <Card title="Clients (Clientes)" icon="users" href="/features/clients">
+    Maintain a client directory with document type, contact details, and purchase history. A default "Público General" client is seeded for anonymous walk-in sales.
+  </Card>
+  <Card title="Users & Roles" icon="user-shield" href="/features/users">
+    Manage system users and assign them to one of three roles — Administrador, Gerente, or Cajero — each with its own access level and permitted actions.
+  </Card>
+</CardGroup>
+
+## Tech Stack
+
+| Layer | Technology | Version |
+|---|---|---|
+| Web Framework | ASP.NET Core MVC | .NET 10 |
+| ORM | Entity Framework Core | 10.0.9 |
+| Database | SQL Server / LocalDB | — |
+| Frontend | Bootstrap 5 + Bootstrap Icons | 5.x |
+| Auth | Cookie Authentication | ASP.NET Core built-in |
+
+## Built-in Seed Data
+
+When you run EF Core migrations for the first time, the application automatically seeds a minimal but complete starting dataset so the store is operational immediately after setup.
+
+**Roles (3)** — Access control is enforced through three built-in roles, each mapped to a distinct set of permissions within the application:
+
+| ID | Role Name | Intended For |
+|---|---|---|
+| 1 | Administrador | Full system access — user management, configuration, all reports |
+| 2 | Gerente | Sales, inventory, and client management; no user administration |
+| 3 | Cajero | Point-of-sale operations and client lookup only |
+
+**Admin User (1)** — A default administrator account is seeded with full access so you can log in immediately after running migrations:
+
+- **Full name:** Administrador del Sistema
+- **Username:** `admin`
+- **Email:** `admin@micholo.com`
+- **Password:** `admin123`
+- **Role:** Administrador
+
+<Note>
+  The seeded admin password `admin123` is intentionally simple for first-run convenience. **You must change it before deploying to production.** Any user with network access to the application can attempt to log in with these credentials.
+</Note>
+
+**Default Client (1)** — A "Público General" client record (ID = 1) is seeded to represent anonymous walk-in customers. When a cashier processes a sale without identifying a specific client, this record is used so every transaction always has a valid client reference in the database.
+
+**Product Categories (6)** — Six starting categories cover the most common inventory segments for a general retail store:
+
+| ID | Category | Description |
+|---|---|---|
+| 1 | Lácteos | Leche, queso, yogurt y derivados |
+| 2 | Bebidas | Gaseosas, jugos, agua y bebidas |
+| 3 | Snacks | Galletas, papas, dulces y golosinas |
+| 4 | Limpieza | Detergentes, lejía, jabones |
+| 5 | Abarrotes | Arroz, azúcar, aceite, fideos |
+| 6 | Frutas y Verduras | Productos frescos del día |

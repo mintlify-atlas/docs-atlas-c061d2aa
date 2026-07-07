@@ -1,0 +1,135 @@
+{
+  "projectType": "saas",
+  "projectName": "Tienda Mi Cholo S.A.C",
+  "projectDescription": "A full-stack ASP.NET Core MVC point-of-sale and inventory management system for a retail store, featuring role-based access, sales processing with receipt generation, product/stock management, and a real-time dashboard.",
+  "theme": "almond",
+  "primaryColor": "#10b981",
+  "lightColor": "#059669",
+  "darkColor": "#0f172a",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Overview",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "configuration"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/roles-and-permissions",
+              "concepts/data-model"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Features",
+        "groups": [
+          {
+            "group": "Dashboard & Navigation",
+            "pages": [
+              "features/dashboard",
+              "features/authentication"
+            ]
+          },
+          {
+            "group": "Sales",
+            "pages": [
+              "features/sales-overview",
+              "features/new-sale",
+              "features/sale-detail"
+            ]
+          },
+          {
+            "group": "Inventory",
+            "pages": [
+              "features/products",
+              "features/categories"
+            ]
+          },
+          {
+            "group": "Administration",
+            "pages": [
+              "features/clients",
+              "features/users",
+              "features/roles"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "Data Models",
+            "pages": [
+              "reference/models/producto",
+              "reference/models/venta",
+              "reference/models/cliente",
+              "reference/models/usuario"
+            ]
+          },
+          {
+            "group": "Controllers",
+            "pages": [
+              "reference/controllers/venta",
+              "reference/controllers/producto",
+              "reference/controllers/acceso"
+            ]
+          },
+          {
+            "group": "Database",
+            "pages": [
+              "reference/database",
+              "reference/migrations"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Role-based access control with three roles: Administrador, Gerente, and Cajero",
+    "Point-of-sale interface with live product search and cart management",
+    "Automatic voucher number generation for Boleta (B001-XXXXXXXX) and Factura (F001-XXXXXXXX)",
+    "Real-time dashboard with daily revenue, sales count, and low-stock alerts",
+    "Full inventory management: products with categories, stock tracking, and active/inactive status",
+    "Client management with DNI/RUC document validation and duplicate detection",
+    "Cookie-based authentication with 30-minute session timeout",
+    "Entity Framework Core 10 with SQL Server and database migrations",
+    "Paginated product listing with name/description search",
+    "Automatic stock adjustment on sale creation and deletion",
+    "Dark-themed responsive UI built with Bootstrap 5 and Bootstrap Icons"
+  ],
+  "publicApiSurface": [
+    "GET /Acceso/Login — Login page",
+    "POST /Acceso/Login — Authenticate user with email and password",
+    "GET /Acceso/Logout — Sign out and clear session",
+    "GET /Home/Index — Dashboard with KPIs and recent sales",
+    "GET /Venta/Lista — List all sales (all authenticated roles)",
+    "GET /Venta/Nueva — New sale form (Administrador, Gerente, Cajero)",
+    "POST /Venta/Nueva — Submit new sale with products and client info",
+    "GET /Venta/BuscarProductos?q={query} — JSON product search for sale form",
+    "GET /Venta/Detalle/{id} — Sale detail with line items",
+    "GET /Venta/Eliminar/{id} — Delete sale and restore stock (Administrador, Gerente)",
+    "GET /Producto/Lista?buscar={query}&pagina={n} — Paginated product list",
+    "GET /Producto/Nuevo — New product form (Administrador, Gerente)",
+    "POST /Producto/Nuevo — Create product",
+    "POST /Producto/CambiarEstado/{id} — Toggle product active/inactive status",
+    "GET /Categoria/Lista — List categories (all authenticated roles)",
+    "POST /Categoria/Nuevo — Create category (Administrador, Gerente)",
+    "GET /Cliente/Lista — List clients (all authenticated roles)",
+    "POST /Cliente/Nuevo — Create client with document validation",
+    "GET /Usuario/Lista — List users (Administrador only)",
+    "POST /Usuario/Nuevo — Create user with role assignment (Administrador only)",
+    "GET /Rol/Lista — List roles (Administrador only)",
+    "POST /DetalleVenta/Nuevo — Add line item to sale (Administrador, Gerente, Cajero)",
+    "GET /DetalleVenta/Eliminar/{id} — Remove line item and restore stock"
+  ]
+}

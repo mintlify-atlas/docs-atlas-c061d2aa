@@ -1,0 +1,199 @@
+---
+title: "Authentication and Session Management"
+sidebarTitle: "Authentication"
+description: "Cookie-based login with email and password, a 30-minute session timeout, role-enforced access, and a dedicated access-denied page for unauthorized routes."
+---
+
+**Tienda Mi Cholo S.A.C** uses two complementary security layers in tandem: **ASP.NET Core Cookie Authentication** for persistent, cryptographically signed identity across requests, and **server-side sessions** (`IDistributedMemoryCache`) for lightweight, per-tab data such as the user's display name and role string. Both layers are configured in `Program.cs` and activated together during the middleware pipeline. Every controller that requires login is guarded by the `[Authorize]` attribute; unauthenticated requests are automatically redirected to `/Acceso/Login` by the cookie middleware.
+
+## Logging In
+
+The login page is served at `/Acceso/Login` and accepts an email address and a plain-text password. The form binds to the `LoginVM` view model.
+
+<Steps>
+  <Step title="Redirect to login">
+    When a visitor navigates to any `[Authorize]`-protected route without a valid authentication cookie, the cookie middleware intercepts the request and redirects to `/Acceso/Login`. The original URL is preserved in the `ReturnUrl` query parameter so the user lands back on the intended page after a successful login.
+  </Step>
+  <Step title="Submit credentials">
+    The user fills in their **Correo Electrónico** and **Contraseña** on the login form and clicks **Iniciar Sesión**. The form posts to `AccesoController.Login` (HTTP POST).
+  </Step>
+  <Step title="Look up the user">
+    The controller queries the `Usuarios` table, eager-loading the related `Rol` record, and searches for a row where `CorreoUsuario` and `Contraseña` match the submitted values:
+
+    ```csharp
+    Usuario? usuario = await _context.Usuarios
+        .Include(u => u.Rol)
+        .FirstOrDefaultAsync(u =>
+            u.CorreoUsuario == loginVM.Correo &&
+            u.Contraseña   == loginVM.Contraseña);
+    ```
+  </Step>
+  <Step title="Handle not found">
+    If no matching record is found, `ViewData["Mensaje"]` is set to **"Correo o contraseña incorrectos"** and the login view is re-rendered with the error alert visible. No further action is taken.
+  </Step>
+  <Step title="Handle deactivated account">
+    If a matching record exists but `usuario.Estado == false`, `ViewData["Mensaje"]` is set to **"Su cuenta está desactivada. Contacte al administrador."** and the view is returned. The user cannot log in until an administrator re-enables the account.
+  </Step>
+  <Step title="Build identity and sign in">
+    On a successful match with an active account, the controller builds a claims list, creates a `ClaimsIdentity`, and signs in the cookie:
+
+    ```csharp
+    var claims = new List<Claim>()
+    {
+        new Claim(ClaimTypes.Name,  usuario.NomUsuario),
+        new Claim(ClaimTypes.Email, usuario.CorreoUsuario),
+        new Claim(ClaimTypes.Role,  usuario.Rol.NomRol),
+        new Claim("IdUsuario",      usuario.ID_Usuario.ToString()),
+        new Claim("NomCompleto",    usuario.NomCompleto)
+    };
+
+    var claimsIdentity = new ClaimsIdentity(
+        claims,
+        CookieAuthenticationDefaults.AuthenticationScheme);
+
+    var properties = new AuthenticationProperties()
+    {
+        AllowRefresh = true,
+        IsPersistent = true
+    };
+
+    await HttpContext.SignInAsync(
+        CookieAuthenticationDefaults.AuthenticationScheme,
+        new ClaimsPrincipal(claimsIdentity),
+        properties);
+    ```
+  </Step>
+  <Step title="Populate session and redirect">
+    Immediately after signing in the cookie, four session keys are written to the server-side session store. The user is then redirected to `/Home/Index`:
+
+    ```csharp
+    HttpContext.Session.SetString("Usuario",     usuario.NomUsuario);
+    HttpContext.Session.SetString("NomCompleto", usuario.NomCompleto);
+    HttpContext.Session.SetString("Rol",         usuario.Rol.NomRol);
+    HttpContext.Session.SetInt32 ("IdUsuario",   usuario.ID_Usuario);
+
+    return RedirectToAction("Index", "Home");
+    ```
+  </Step>
+</Steps>
+
+### LoginVM view model
+
+The login form is bound to the following view model, located in `ViewModels/LoginVM.cs`:
+
+```csharp
+namespace Final_proyecto.ViewModels
+{
+    public class LoginVM
+    {
+        public string Correo    { get; set; }
+        public string Contraseña { get; set; }
+    }
+}
+```
+
+Both properties are rendered as required `<input>` fields in the Razor view — `type="email"` for `Correo` and `type="password"` for `Contraseña` — so the browser performs basic format validation before the form is submitted.
+
+## Session Data
+
+After a successful login two parallel stores carry user identity data for the duration of the session.
+
+### Cookie claims
+
+The authentication cookie contains a signed `ClaimsPrincipal` with the following claims:
+
+| Claim type | Value stored | Used for |
+|---|---|---|
+| `ClaimTypes.Name` | `NomUsuario` | `User.Identity.Name`, sidebar avatar initial |
+| `ClaimTypes.Email` | `CorreoUsuario` | Programmatic email lookup |
+| `ClaimTypes.Role` | `NomRol` | `[Authorize(Roles = "...")]` checks, `User.IsInRole(...)` in views |
+| `"IdUsuario"` (custom) | `ID_Usuario` (int as string) | Linking actions to the logged-in user's record |
+| `"NomCompleto"` (custom) | `NomCompleto` | Display name in the sidebar: `User.FindFirst("NomCompleto")?.Value` |
+
+### Server-side session keys
+
+In addition to the cookie, `AccesoController` writes the following keys into the distributed in-memory session store:
+
+| Key | Type | Value |
+|---|---|---|
+| `"Usuario"` | `string` | `NomUsuario` |
+| `"NomCompleto"` | `string` | `NomCompleto` |
+| `"Rol"` | `string` | `NomRol` |
+| `"IdUsuario"` | `int` | `ID_Usuario` |
+
+<Info>
+  Session values can be read anywhere in the application via `HttpContext.Session.GetString("NomCompleto")` or `HttpContext.Session.GetInt32("IdUsuario")`. They are stored server-side and are never transmitted to the browser directly.
+</Info>
+
+## Session Timeout
+
+The session is configured in `Program.cs` with an idle timeout of **30 minutes**:
+
+```csharp
+builder.Services.AddSession(options =>
+{
+    options.IdleTimeout        = TimeSpan.FromMinutes(30);
+    options.Cookie.HttpOnly    = true;
+    options.Cookie.IsEssential = true;
+});
+```
+
+| Setting | Value | Effect |
+|---|---|---|
+| `IdleTimeout` | `30 minutes` | Session is cleared server-side after 30 minutes of inactivity |
+| `Cookie.HttpOnly` | `true` | Session cookie is inaccessible to JavaScript, reducing XSS risk |
+| `Cookie.IsEssential` | `true` | Session cookie is always set, even when the user has not accepted optional cookies |
+
+When the server-side session expires after inactivity, the next request from that browser will have no valid session data. If the authentication cookie has also expired or been cleared, the cookie middleware redirects the user back to `/Acceso/Login`.
+
+## Logging Out
+
+Logout is handled by `AccesoController.Logout`. The action clears the server-side session first, then revokes the authentication cookie, and finally redirects to the login page:
+
+```csharp
+public async Task<IActionResult> Logout()
+{
+    HttpContext.Session.Clear();
+    await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+    return RedirectToAction(nameof(Login));
+}
+```
+
+The logout link is present in two places in the shared layout: the sidebar footer icon (`bi-box-arrow-right`) and the **Salir** button in the top header. Both link to `/Acceso/Logout`.
+
+## Access Denied
+
+When an authenticated user attempts to reach a route they are not authorised for (e.g., a non-administrator navigating to `/Usuario/Lista`), the cookie middleware redirects to `/Acceso/AccesoDenegado` instead of returning a bare HTTP 403 response. This path is set in `Program.cs`:
+
+```csharp
+builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie(options =>
+    {
+        options.LoginPath       = "/Acceso/Login";
+        options.AccessDeniedPath = "/Acceso/AccesoDenegado";
+    });
+```
+
+The `AccesoDenegado` GET action in `AccesoController` simply returns its view, which renders a user-friendly page informing the user that they do not have the necessary permissions to access the requested resource and prompting them to return to the Dashboard.
+
+## Deactivated Accounts
+
+Every `Usuario` record has a boolean `Estado` column. When `Estado = false` the account is considered deactivated.
+
+<Warning>
+  A deactivated user (`Estado = false`) is blocked at the login stage — even with correct credentials, the system returns **"Su cuenta está desactivada. Contacte al administrador."** and refuses to issue a cookie or session. The only way to restore access is for an `Administrador`-role user to set `Estado = true` from the user management screens at `/Usuario/Lista`. Be careful not to deactivate all administrator accounts, as this would lock every user out of the administration section.
+</Warning>
+
+The check is performed immediately after a successful credential match:
+
+```csharp
+if (!usuario.Estado)
+{
+    ViewData["Mensaje"] = "Su cuenta está desactivada. Contacte al administrador.";
+    return View();
+}
+```
+
+<Note>
+  `AccesoController` is decorated with `[ResponseCache(Location = ResponseCacheLocation.None, NoStore = true)]`. This instructs the browser **never** to cache any response from this controller — including the login page, the access-denied page, and the logout redirect. As a result, hitting the browser's Back button after logging out will not restore a cached copy of a protected page; the browser will make a fresh request, which the cookie middleware will redirect back to `/Acceso/Login`.
+</Note>

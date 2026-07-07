@@ -1,0 +1,136 @@
+---
+title: "Role Management: Define Access Levels"
+sidebarTitle: "Roles"
+description: "The three built-in roles — Administrador, Gerente, and Cajero — cover all standard retail workflows. Create custom roles for specialized access needs."
+---
+
+Roles are the authorization mechanism that governs what each user can see and do within Tienda Mi Cholo S.A.C. When a user logs in, their assigned role is loaded from the database, added to the authentication cookie as a claim, and matched against `[Authorize(Roles = "...")]` attributes on every controller and action throughout the application. The system ships with three seeded roles that cover the full spectrum of a typical retail operation — Administrador for complete system control, Gerente for operations and inventory oversight, and Cajero for front-of-counter sales tasks. New roles can be created, but their effect on access is limited without corresponding code changes (see [Creating Custom Roles](#creating-custom-roles)).
+
+---
+
+## Built-in Roles
+
+<CardGroup cols={3}>
+  <Card title="Administrador" icon="shield-halved">
+    Full access to every module in the system. Can manage users, roles, clients, products, categories, suppliers, and sales. The only role that can access `UsuarioController` and `RolController`. Seeded with `ID_Rol = 1`.
+  </Card>
+  <Card title="Gerente" icon="chart-line">
+    Operations and inventory management. Can register and edit clients, manage products, categories, and suppliers, and view all sales reports. Cannot access user or role management screens. Seeded with `ID_Rol = 2`.
+  </Card>
+  <Card title="Cajero" icon="cash-register">
+    Front-of-counter access. Can process sales (Boleta and Factura), register new clients, and view the client and product lists. Has read-only access to inventory and cannot edit or delete clients, products, or suppliers. Seeded with `ID_Rol = 3`.
+  </Card>
+</CardGroup>
+
+---
+
+## Role Fields
+
+<ParamField path="NomRol" type="string" required>
+  The name of the role. Maximum 50 characters. This value is matched **by exact string comparison** in every `[Authorize(Roles = "...")]` attribute in the codebase, so the names of the three built-in roles must never be changed.
+</ParamField>
+
+The `Rol` model is intentionally minimal:
+
+```csharp
+// Models/Rol.cs
+public class Rol
+{
+    [Key, DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+    public int ID_Rol { get; set; }
+
+    [Required, StringLength(50)]
+    public string NomRol { get; set; }
+
+    public ICollection<Usuario> Usuarios { get; set; }
+}
+```
+
+---
+
+## Creating Custom Roles
+
+New roles can be added through the Roles section of the application:
+
+<Steps>
+  <Step title="Navigate to Role Management">
+    Log in as **Administrador** and select **Roles** from the sidebar. The list at `/Rol/Lista` displays all existing roles.
+  </Step>
+  <Step title="Open the New Role Form">
+    Click **Nuevo Rol** to navigate to `/Rol/Nuevo`. Enter a name for the custom role in the `NomRol` field (maximum 50 characters).
+  </Step>
+  <Step title="Save the Role">
+    Submit the form. The controller calls `_context.Roles.AddAsync(rol)` and redirects to the role list on success.
+  </Step>
+  <Step title="Assign to Users">
+    Navigate to [User Management](/features/users) and edit any user account. The new role will appear in the `Rol_ID` dropdown and can be assigned immediately.
+  </Step>
+</Steps>
+
+<Warning>
+  **Custom roles do not automatically gain access to any protected actions.** Every `[Authorize(Roles = "...")]` attribute in the application is hardcoded to one or more of the three built-in role names (`"Administrador"`, `"Gerente"`, `"Cajero"`). A user assigned a custom role (e.g., `"Supervisor"`) will be treated as unauthorized on every protected controller action and will see a `403 Forbidden` response.
+
+  To grant a custom role meaningful access you must modify the `[Authorize(Roles = "...")]` attributes in the relevant controllers and redeploy the application.
+</Warning>
+
+---
+
+## Role Assignment
+
+Roles are assigned to users at the time of account creation and can be changed at any time via the user edit form.
+
+- The `Usuario` model holds an `int Rol_ID` foreign key and a navigation property `Rol Rol`.
+- When loading the create or edit user form, `UsuarioController` populates `ViewBag.Roles` with all records from the `Roles` table:
+  ```csharp
+  // UsuarioController.cs — Nuevo (GET) and Editar (GET)
+  ViewBag.Roles = _context.Roles.ToList();
+  ```
+- The view renders a `<select>` dropdown bound to `Rol_ID`, so every role currently in the database is immediately available for selection.
+- The user list view (`Lista.cshtml`) eagerly loads the related role with `.Include(e => e.Rol)` so that `NomRol` is displayed inline without a secondary query:
+  ```csharp
+  // UsuarioController.cs — Lista (GET)
+  List<Usuario> lista = await _context.Usuarios
+      .Include(e => e.Rol)
+      .ToListAsync();
+  ```
+
+---
+
+## Access Control
+
+<Note>
+  The entire `RolController` is protected by `[Authorize(Roles = "Administrador")]` at the class level. All CRUD operations — list, create, edit, and delete — are exclusive to the Administrador role. No per-action overrides exist.
+</Note>
+
+```csharp
+[Authorize(Roles = "Administrador")]
+[ResponseCache(Location = ResponseCacheLocation.None, NoStore = true)]
+public class RolController : Controller
+{
+    // Lista, Nuevo, Editar, Eliminar — all require Administrador
+}
+```
+
+---
+
+## Renaming or Deleting Built-in Roles
+
+<Warning>
+  **Do not rename or delete the three seeded roles.** The strings `"Administrador"`, `"Gerente"`, and `"Cajero"` are hardcoded into `[Authorize(Roles = "...")]` attributes across every controller in the application. If a role is renamed in the database (e.g., `"Administrador"` → `"Admin"`), every controller and action that references the old name will begin denying access to users who hold the renamed role, because the authorization middleware compares role claim values against the attribute strings at request time — it does not perform a database lookup.
+
+  Deleting a built-in role will additionally orphan all user accounts assigned to it and cause navigation errors wherever the role name is referenced.
+</Warning>
+
+---
+
+## Permissions Matrix
+
+For a full breakdown of which roles can access each module and action, refer to the complete permissions reference:
+
+<Card
+  title="Roles and Permissions Matrix"
+  icon="table"
+  href="/concepts/roles-and-permissions"
+>
+  View the consolidated table of every controller action and the roles authorized to access it across the entire application.
+</Card>

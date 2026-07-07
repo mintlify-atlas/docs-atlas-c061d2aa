@@ -1,0 +1,210 @@
+---
+title: "VentaController and DetalleVentaController Reference"
+sidebarTitle: "VentaController"
+description: "All routes for sale creation, listing, detail view, deletion, product search, and sale line item management with access control per role."
+---
+
+`VentaController` and `DetalleVentaController` together manage the complete sales lifecycle in Tienda Mi Cholo. `VentaController` handles sale headers — browsing the sales list, creating new sales with full client resolution and voucher auto-numbering, viewing a sale's detail page, deleting a sale with stock restoration, and a live product-search endpoint used by the sale form. `DetalleVentaController` manages individual line items on an existing sale: adding a new line (with stock validation and total recalculation) and removing a line (with stock restoration and total recalculation). Both controllers carry `[ResponseCache(Location = ResponseCacheLocation.None, NoStore = true)]` and require an authenticated user via `[Authorize]` at the class level; individual actions narrow access further with role-based `[Authorize(Roles = "...")]` attributes.
+
+---
+
+## VentaController
+
+### GET /Venta/Lista
+
+Returns all sales ordered by `FechaVenta` descending, each with its related `Cliente` record eagerly loaded, and passes the list to the `Lista` view.
+
+**Authorization:** Any authenticated user (all roles).
+
+```csharp
+List<Venta> lista = await _context.Ventas
+    .Include(v => v.Cliente)
+    .OrderByDescending(v => v.FechaVenta)
+    .ToListAsync();
+```
+
+---
+
+### GET /Venta/Nueva
+
+Loads the new-sale form. Populates `ViewBag.Clientes` with every client whose `ID_Cliente` is not `1` (i.e., all non-default clients) so the cashier can optionally select an existing customer.
+
+**Authorization:** `Administrador`, `Gerente`, `Cajero`.
+
+<Note>
+  Client ID 1 is the reserved **Público General** default client. It is excluded from the dropdown because it is selected automatically when no client name is provided on the POST.
+</Note>
+
+---
+
+### POST /Venta/Nueva
+
+Creates a new sale inside a database transaction. Resolves or creates the appropriate client record depending on `tipoComprobante`, auto-generates a correlative voucher number, decrements product stock for each line item, and persists the `Venta` together with its `DetalleVenta` collection in a single `SaveChangesAsync` call.
+
+**Authorization:** `Administrador`, `Gerente`, `Cajero`.
+
+<ParamField body="productoIds" type="int[]" required>
+  Array of product IDs to include in the sale. Must not be empty and must have the same length as `cantidades` and `precios`.
+</ParamField>
+
+<ParamField body="cantidades" type="int[]" required>
+  Quantity for each product, parallel to `productoIds`. Each value must be greater than zero and must not exceed the product's current `Stock`.
+</ParamField>
+
+<ParamField body="precios" type="decimal[]" required>
+  Unit price for each product, parallel to `productoIds`. Used directly to compute `Subtotal = cantidad × precio`.
+</ParamField>
+
+<ParamField body="tipoComprobante" type="string" required>
+  Either `"Boleta"` or `"Factura"`. Determines both the voucher prefix (`B001-` / `F001-`) and the client-resolution logic.
+</ParamField>
+
+<ParamField body="clienteNombres" type="string">
+  Full name (Boleta) or *Razón Social* (Factura) of the customer. Optional for Boleta; required for Factura.
+</ParamField>
+
+<ParamField body="numeroDocumento" type="string">
+  DNI (Boleta) or RUC (Factura). For Factura, must be exactly 11 digits and start with `10` or `20`. Ignored for Boleta unless a name was supplied.
+</ParamField>
+
+<ParamField body="telefono" type="string">
+  Mobile number. For Factura, must be 9 digits, start with `9`, and must not be all-identical digits. Ignored for Boleta.
+</ParamField>
+
+<Expandable title="Client-resolution logic">
+  **Boleta:**
+  - If `clienteNombres` is blank → uses the **Público General** client (DNI `00000000`).
+  - If `clienteNombres` is provided → looks up an existing `DNI` client with that name; creates one with an auto-generated 8-digit DNI if none is found.
+
+  **Factura:**
+  - `clienteNombres`, `numeroDocumento`, and `telefono` are all required.
+  - RUC must be 11 digits starting with `10` or `20`.
+  - Looks up an existing client by RUC and `TipoDocumento = "RUC"`; updates *Razón Social* and phone if found, otherwise creates a new client.
+</Expandable>
+
+<Expandable title="Voucher number generation">
+  The controller queries the highest existing `NumeroComprobante` for the selected `tipoComprobante` that starts with the prefix (`B001-` or `F001-`), extracts the numeric suffix, increments it by one, and formats it zero-padded to 8 digits. Example: `B001-00000003`.
+</Expandable>
+
+**On success:** Sets `TempData["Success"]` with the voucher number and redirects to `GET /Venta/Lista`.
+
+**On validation failure:** Rolls back the transaction, sets `TempData["Error"]`, restores form state via `ViewBag` (including a JSON-serialized cart for JavaScript re-hydration), and returns the `Nueva` view.
+
+---
+
+### GET /Venta/BuscarProductos?q={query}
+
+Live search endpoint consumed by the new-sale form's product typeahead. Returns a JSON array of matching active products that have stock available.
+
+**Authorization:** Any authenticated user (all roles).
+
+<ParamField query="q" type="string" required>
+  Search term matched against `NombreProducto` using a SQL `LIKE`/`Contains`. Returns an empty array when blank or whitespace.
+</ParamField>
+
+Results are filtered to `Estado = true` and `Stock > 0`, limited to 20 records.
+
+**Response shape:**
+
+```json
+[
+  {
+    "id": 14,
+    "nombre": "Leche Gloria 1L",
+    "precio": 4.50,
+    "stock": 120
+  }
+]
+```
+
+<Tip>
+  Call this endpoint from client-side JavaScript as the user types in the product search field. The 20-record cap keeps response sizes small even on large catalogs.
+</Tip>
+
+---
+
+### GET /Venta/Detalle/{id}
+
+Returns the full sale record for display: the `Venta` header with its `Cliente`, and all `DetalleVenta` line items each with their associated `Producto`.
+
+**Authorization:** Any authenticated user (all roles).
+
+<ParamField path="id" type="int" required>
+  Primary key (`ID_Venta`) of the sale to display.
+</ParamField>
+
+```csharp
+Venta venta = await _context.Ventas
+    .Include(v => v.Cliente)
+    .Include(v => v.Detalles)
+        .ThenInclude(d => d.Producto)
+    .FirstAsync(v => v.ID_Venta == id);
+```
+
+---
+
+### GET /Venta/Eliminar/{id}
+
+Permanently deletes a sale after restoring the stock for every product that appeared in it. Removes all associated `DetalleVenta` rows first, then removes the `Venta` header, and redirects to the sales list.
+
+**Authorization:** `Administrador`, `Gerente`.
+
+<ParamField path="id" type="int" required>
+  Primary key (`ID_Venta`) of the sale to delete.
+</ParamField>
+
+<Warning>
+  This action is irreversible. All `DetalleVenta` records are hard-deleted along with the parent `Venta`. Product stock is restored by adding each line item's `Cantidad` back to `Producto.Stock` before deletion.
+</Warning>
+
+---
+
+## DetalleVentaController
+
+### POST /DetalleVenta/Nuevo
+
+Adds a single line item to an existing sale. Fetches the product to validate stock and resolve the current unit price, computes the subtotal, decrements stock, persists the new `DetalleVenta`, then recalculates and saves `Venta.MontoTotal`.
+
+**Authorization:** `Administrador`, `Gerente`, `Cajero`.
+
+<ParamField body="detalle" type="DetalleVenta" required>
+  Model-bound `DetalleVenta` object. The required fields are:
+
+  - `Venta_ID` — the parent sale.
+  - `Producto_ID` — the product to add.
+  - `Cantidad` — units to add; must be greater than zero and not exceed current stock.
+
+  `PrecioUnitario` and `Subtotal` are **overwritten** by the server from the product record regardless of what is submitted.
+</ParamField>
+
+<Note>
+  If `Cantidad ≤ 0`, the action silently redirects back to `GET /Venta/Detalle/{id}` without adding a line. If `Cantidad > producto.Stock`, it redirects with `TempData["Error"]` set.
+</Note>
+
+After saving, `Venta.MontoTotal` is recalculated as the sum of all remaining `DetalleVenta.Subtotal` values for that sale:
+
+```csharp
+venta.MontoTotal = venta.Detalles.Sum(d => d.Subtotal);
+```
+
+**On success:** Redirects to `GET /Venta/Detalle/{Venta_ID}`.
+
+---
+
+### GET /DetalleVenta/Eliminar/{id}
+
+Removes a single line item from a sale. Restores the product's stock by adding the line's `Cantidad` back, deletes the `DetalleVenta` record, then recalculates and saves `Venta.MontoTotal`.
+
+**Authorization:** `Administrador`, `Gerente`, `Cajero`.
+
+<ParamField path="id" type="int" required>
+  Primary key (`ID_DetalleVenta`) of the line item to remove.
+</ParamField>
+
+After removal, `Venta.MontoTotal` is recalculated the same way as in the Nuevo action:
+
+```csharp
+venta.MontoTotal = venta.Detalles.Sum(d => d.Subtotal);
+```
+
+**On success:** Redirects to `GET /Venta/Detalle/{Venta_ID}`.

@@ -1,0 +1,172 @@
+---
+title: "Register a New Sale with the POS Interface"
+sidebarTitle: "New Sale"
+description: "Step-by-step guide to the point-of-sale screen: search products, build a cart, select receipt type, enter client data, and finalize the transaction."
+---
+
+The new-sale screen is a split-panel point-of-sale interface designed for fast checkout. The left panel handles receipt type selection and client data entry, along with a live product-search box. The right panel is the shopping cart, which updates in real time as products are added or removed. When the cashier is satisfied with the cart contents, a single button finalizes the transaction, runs server-side validation, decrements stock, and generates the voucher number — all inside a database transaction to guarantee consistency.
+
+## Accessing the Screen
+
+Navigate to `/Venta/Nueva`. Access is restricted to users with one of the following roles:
+
+| Role | Can open New Sale? |
+|---|---|
+| Administrador | ✅ Yes |
+| Gerente | ✅ Yes |
+| Cajero | ✅ Yes |
+| Other authenticated users | ❌ No (HTTP 403) |
+
+A "Nueva Venta" shortcut button is also shown on the sales list (`/Venta/Lista`) whenever the current user holds one of these three roles.
+
+## Step-by-Step: Registering a Sale
+
+<Steps>
+  <Step title="Choose receipt type">
+    The first control in the client panel is the **Tipo de Comprobante** dropdown. Select either **Boleta de Venta** (default) or **Factura**. Your selection immediately adapts the client-data form below it: Boleta shows a single optional name field, while Factura reveals the Razón Social, RUC, and Celular fields and marks them as required.
+  </Step>
+
+  <Step title="Enter client info — Boleta">
+    For a Boleta, the **Nombre del Cliente** field is entirely optional. Type the customer's name if you want to associate the sale with a named client. If the field is left blank, the system will automatically link the sale to the built-in **Público General** record — no further action is needed.
+
+    <Tip>
+      If a client with the exact same name and `TipoDocumento = DNI` already exists in the database, the sale is linked to that existing record. Otherwise a new client is created with an auto-generated 8-digit DNI.
+    </Tip>
+  </Step>
+
+  <Step title="Enter client info — Factura">
+    For a Factura all three fields are mandatory. Fill them in before adding products to avoid a validation error at submission time.
+
+    | Field | Validation |
+    |---|---|
+    | **Razón Social** | Non-empty. Represents the business name of the client. |
+    | **RUC** | Exactly 11 digits, must start with `10` (natural-person RUC) or `20` (legal-entity RUC). Only digits are accepted — the field auto-strips any non-numeric input. |
+    | **Celular** | Exactly 9 digits, must start with `9`, must not be all the same digit (e.g. `999999999` is rejected). Only digits are accepted. |
+
+    If a client with the same RUC already exists, the system updates their Razón Social and Celular to whatever you entered, then links the sale to that existing record.
+  </Step>
+
+  <Step title="Search for products">
+    Use the **Buscar Producto por Nombre** search box at the bottom of the left panel. Start typing the product name — suggestions appear automatically after a **300 ms debounce** once at least **2 characters** have been entered. Each suggestion card shows:
+
+    - Product name (bold)
+    - Available stock (`Stock disp: N`)
+    - Sale price badge (`S/ #.##`)
+
+    Only products where `Estado = true` (active) **and** `Stock > 0` are returned, so out-of-stock or deactivated products never appear in search results. A maximum of **20 results** is returned per query.
+
+    Clicking anywhere outside the suggestion dropdown closes it without selecting a product.
+  </Step>
+
+  <Step title="Add products to the cart">
+    Click any suggestion to add it to the cart on the right panel. The suggestion box closes and focus returns to the search field so you can immediately search for the next product.
+
+    - If the product is **not yet in the cart**, a new row is created with a quantity of `1`.
+    - If the product is **already in the cart**, its quantity is incremented by `1` automatically.
+    - The quantity input accepts manual edits. The `max` attribute is set to the product's available stock, and any attempt to enter a higher value is silently capped to that maximum.
+
+    The **Registrar Venta** button remains disabled until at least one product row exists in the cart.
+  </Step>
+
+  <Step title="Review the cart">
+    The right-panel cart table shows the following columns for each line item:
+
+    | Column | Description |
+    |---|---|
+    | **Producto** | Product name and remaining stock hint |
+    | **Cant.** | Editable quantity input (1 – available stock) |
+    | **P. Unit.** | Unit price read-only — always the product's `PrecioVenta` at the time it was added to the cart |
+    | **Subtotal** | `Cantidad × P. Unit.`, recalculated live on every quantity change |
+    | *(remove)* | Trash icon button — removes the row from the cart and recalculates the grand total |
+
+    The **TOTAL** row in the table footer sums all subtotals in real time and displays the running grand total as `S/ #,##0.00`.
+  </Step>
+
+  <Step title="Finalize the sale">
+    Click **Registrar Venta**. The following sequence of events occurs:
+
+    1. **Client-side validation** runs first (`validarFinalizacion()`). If any Factura field is missing or fails its regex, an error message is shown inline and the form does not submit.
+    2. **Server-side validation** checks that at least one product was submitted, that array lengths are consistent, and re-validates all Factura fields and RUC/phone formats.
+    3. **Transaction scope** is opened. For each line item the server verifies the product exists and that the requested quantity does not exceed current stock.
+    4. **Stock is decremented** (`producto.Stock -= cant`) for every product in the cart.
+    5. **Voucher number** is auto-generated as the next correlative in the series (`B001-XXXXXXXX` or `F001-XXXXXXXX`).
+    6. The `Venta` and all `DetalleVenta` records are persisted and the transaction is committed.
+    7. The user is redirected to the sales list with a success notification showing the new voucher number.
+
+    If any step inside the transaction fails, the transaction is rolled back and the cart is restored (see [Cart Restoration](#cart-restoration) below).
+  </Step>
+</Steps>
+
+## Product Search API
+
+The product search box is powered by a dedicated endpoint on `VentaController`:
+
+```
+GET /Venta/BuscarProductos?q={query}
+```
+
+**Query parameter:** `q` — the search string typed by the user.
+
+**Filter criteria applied server-side:**
+- `NombreProducto.Contains(q)` — case-insensitive substring match
+- `Estado == true` — only active products
+- `Stock > 0` — only products with available inventory
+
+**Result limit:** 20 items per request.
+
+**Response shape** — returns a JSON array. Each element contains:
+
+| Property | Type | Description |
+|---|---|---|
+| `id` | `int` | `Producto.ID_Producto` |
+| `nombre` | `string` | `Producto.NombreProducto` |
+| `precio` | `decimal` | `Producto.PrecioVenta` — current sale price |
+| `stock` | `int` | `Producto.Stock` — current available quantity |
+
+**Example response:**
+
+```json
+[
+  { "id": 5, "nombre": "Leche Gloria 1L", "precio": 4.50, "stock": 30 }
+]
+```
+
+If `q` is empty or whitespace, the endpoint returns an empty array immediately without querying the database.
+
+The frontend applies a **300 ms debounce** before firing the request, and requires at least **2 characters** before any request is sent, preventing unnecessary load from single-keypress searches.
+
+## Validation Rules
+
+Both the browser and the server validate a sale independently. The table below lists every rule enforced and where it fires.
+
+| Rule | Client-side | Server-side |
+|---|---|---|
+| At least one product in the cart | ✅ (button stays disabled) | ✅ (`productoIds.Length == 0`) |
+| Array lengths consistent (`productoIds`, `cantidades`, `precios`) | ✅ (arrays built by JS) | ✅ |
+| Factura: Razón Social non-empty | ✅ | ✅ |
+| Factura: RUC non-empty | ✅ | ✅ |
+| Factura: Celular non-empty | ✅ | ✅ |
+| RUC format: `^(10\|20)\d{9}$` | ✅ | ✅ |
+| Phone format: `^9\d{8}$` | ✅ | ✅ |
+| Phone: no all-same digits | ✅ (`/^(\d)\1{8}$/` check) | ✅ (regex `^(?!(\d)\1{8})9\d{8}$`) |
+| Quantity > 0 for each line item | ✅ (`min="1"` on input) | ✅ |
+| Quantity ≤ available stock | ✅ (JS `max` attribute cap) | ✅ (per-product re-check) |
+| Product must exist in database | — | ✅ |
+
+<Warning>
+  Even if the cart quantity was valid when you searched for the product, stock can be reduced by another sale between the time you added it to your cart and the moment you click **Registrar Venta**. If this happens, the server rejects the submission with a message such as: *"Stock insuficiente para [Producto]. Stock disponible: N"* and the cart is restored automatically.
+</Warning>
+
+## Cart Restoration
+
+If the server rejects a submission for any reason (validation failure, stock conflict, unexpected exception), the current state of the cart and form fields is preserved so the cashier does not have to start over. The `RestaurarEstadoVenta` helper re-populates `ViewBag` with the following data:
+
+| ViewBag key | Contents |
+|---|---|
+| `TipoComprobante` | Previously selected receipt type |
+| `ClienteNombres` | Boleta client name or Factura Razón Social |
+| `NumeroDocumento` | RUC entered (Factura) |
+| `Telefono` | Phone number entered (Factura) |
+| `RestoredCart` | JSON array of cart items serialized as `{ id, nombre, precio, stockMaximo, cantidad }` |
+
+On page load, the view reads `ViewBag.RestoredCart` and replays each item through `agregarFila()`, restoring the exact quantities the cashier had entered before the error occurred. This means the cashier only needs to review the error message, correct the problem (e.g. reduce a quantity), and resubmit.

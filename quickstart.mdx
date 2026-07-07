@@ -1,47 +1,114 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with Tienda Mi Cholo S.A.C"
+sidebarTitle: "Quickstart"
+description: "Clone the repo, configure SQL Server, run EF Core migrations, and make your first sale in under 10 minutes."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
-
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+This guide walks you through everything needed to get Tienda Mi Cholo S.A.C running locally — from cloning the repository and configuring the database connection to logging in for the first time and registering your first sale.
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+  <Step title="Prerequisites">
+    Make sure you have the following installed before you begin:
 
+    - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
+    - SQL Server or [SQL Server Express LocalDB](https://learn.microsoft.com/en-us/sql/database-engine/configure-windows/sql-server-express-localdb) (included with Visual Studio)
+    - Visual Studio 2022+ with ASP.NET workload **or** VS Code with the C# Dev Kit extension
+    - [EF Core CLI tools](https://learn.microsoft.com/en-us/ef/core/cli/dotnet): `dotnet tool install --global dotnet-ef`
+  </Step>
+
+  <Step title="Clone the repository">
     ```bash
-    npm install your-package
+    git clone https://github.com/interezante456-pixel/nuevo-proyecto-viernes.git
+    cd "nuevo-proyecto-viernes/Final proyecto"
     ```
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
 
-    ```bash
-    your-cli init
+  <Step title="Configure the connection string">
+    Open `appsettings.json` and locate the `CadenaSQL` key:
+
+    ```json appsettings.json
+    {
+      "ConnectionStrings": {
+        "CadenaSQL": "Data Source=(localdb)\\MSSQLLocalDB;Initial Catalog=TIENDA_MICHOLO;Trusted_Connection=True;TrustServerCertificate=True;"
+      }
+    }
     ```
+
+    The default points to **SQL Server LocalDB** using Windows Authentication. To connect to a different SQL Server instance, replace the connection string:
+
+    ```json appsettings.json
+    {
+      "ConnectionStrings": {
+        "CadenaSQL": "Server=YOUR_SERVER;Database=TIENDA_MICHOLO;User Id=sa;Password=YOUR_PASSWORD;TrustServerCertificate=True;"
+      }
+    }
+    ```
+
+    | Component | Default value | Description |
+    |-----------|---------------|-------------|
+    | `Data Source` | `(localdb)\\MSSQLLocalDB` | SQL Server instance |
+    | `Initial Catalog` | `TIENDA_MICHOLO` | Database name |
+    | `Trusted_Connection` | `True` | Use Windows auth (LocalDB only) |
+    | `TrustServerCertificate` | `True` | Skip TLS cert validation (dev only) |
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+
+  <Step title="Apply database migrations">
+    From the `Final proyecto` directory, run:
 
     ```bash
-    your-cli start
+    dotnet ef database update
     ```
+
+    This creates the `TIENDA_MICHOLO` database, applies all three migrations (schema creation, product status column, nullable client fields), and seeds the following initial data:
+
+    - **Roles**: Administrador, Gerente, Cajero
+    - **Admin user**: `admin@micholo.com` / `admin123`
+    - **Default client**: Público General (used for anonymous Boleta sales)
+    - **Product categories**: Lácteos, Bebidas, Snacks, Limpieza, Abarrotes, Frutas y Verduras
+
+    <Note>
+      If `dotnet ef` is not found, install the EF Core CLI: `dotnet tool install --global dotnet-ef`
+    </Note>
+  </Step>
+
+  <Step title="Run the application">
+    ```bash
+    dotnet run
+    ```
+
+    The application starts on the port defined in `Properties/launchSettings.json` (default `http://localhost:5020`). It automatically redirects to the login page at `/Acceso/Login`.
+
+    <Tip>
+      In Visual Studio, press **F5** to run with the debugger attached. The browser opens automatically on the correct port.
+    </Tip>
+  </Step>
+
+  <Step title="Log in">
+    Use the seeded administrator credentials:
+
+    | Field | Value |
+    |-------|-------|
+    | Email | `admin@micholo.com` |
+    | Password | `admin123` |
+
+    <Warning>
+      Change this password immediately after your first login. In the current implementation, passwords are stored as plain text in the database. Navigate to **Usuarios** → select the admin user → **Editar** to update the password.
+    </Warning>
+
+    After a successful login, you are redirected to the Dashboard (`/Home/Index`) showing today's KPIs.
+  </Step>
+
+  <Step title="Register your first sale">
+    1. Navigate to **Ventas** → **Nueva Venta** in the sidebar.
+    2. Select a receipt type — **Boleta** (default) or **Factura**.
+    3. Type a product name in the search box (at least 2 characters). Results appear after 300ms.
+    4. Click a product to add it to the cart. Adjust the quantity if needed.
+    5. Click **Registrar Venta**. The stock is decremented automatically and a sequential receipt number is generated.
+
+    See the [New Sale guide](/features/new-sale) for full details on the POS interface.
   </Step>
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
-
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+<Note>
+  SQL Server LocalDB is only available on Windows. On macOS or Linux, use a full SQL Server instance via Docker: `docker run -e "ACCEPT_EULA=Y" -e "SA_PASSWORD=YourStrong@Passw0rd" -p 1433:1433 -d mcr.microsoft.com/mssql/server:2022-latest`
+</Note>

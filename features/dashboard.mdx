@@ -1,0 +1,202 @@
+---
+title: "Dashboard: Real-Time Store KPIs and Alerts"
+sidebarTitle: "Dashboard"
+description: "The dashboard displays daily revenue, sales count, product totals, low-stock alerts, recent sales, and a watchlist of products needing restocking."
+---
+
+The Dashboard is the central command screen of **Tienda Mi Cholo S.A.C**. Every authenticated user lands here after logging in and can see six live KPI cards computed against the database at request time, a table of the five most recent sales, and a low-stock alert table listing the five products most urgently needing a restock. The page is protected by the `[Authorize]` attribute on `HomeController`, so any unauthenticated visitor is automatically redirected to `/Acceso/Login`.
+
+## KPI Cards
+
+Six stat cards are rendered across the top of the page. Each one is populated by a `ViewBag` property that `HomeController.Index()` resolves asynchronously before returning the view.
+
+<CardGroup cols={3}>
+  <Card title="Ingresos Hoy" icon="dollar-sign">
+    **ViewBag key:** `IngresoHoy`
+
+    The sum of `MontoTotal` across every `Venta` record whose `FechaVenta.Date` equals today's date (`DateTime.Today`). Displayed as a Peruvian sol amount formatted to two decimal places (`S/ 0.00`). Returns `0` when there are no sales today.
+  </Card>
+  <Card title="Ventas Hoy" icon="cart-shopping">
+    **ViewBag key:** `VentasHoy`
+
+    The count of `Venta` records where `FechaVenta.Date == DateTime.Today`. Gives cashiers and managers an instant view of how busy the current day has been.
+  </Card>
+  <Card title="Total Ventas" icon="receipt">
+    **ViewBag key:** `TotalVentas`
+
+    The total count of every sale ever recorded in the system, regardless of date. Useful as a lifetime business metric.
+  </Card>
+  <Card title="Productos" icon="box">
+    **ViewBag key:** `TotalProductos`
+
+    The count of all rows in the `Productos` table — the full product catalogue size, including items that may currently have zero stock.
+  </Card>
+  <Card title="Stock Bajo" icon="triangle-exclamation">
+    **ViewBag key:** `ProductosBajoStock`
+
+    The count of products whose `Stock` value is **10 or fewer** units. This card is styled with a red accent to draw immediate attention. Click through to the Productos list to identify which items need ordering.
+  </Card>
+  <Card title="Clientes" icon="users">
+    **ViewBag key:** `TotalClientes`
+
+    The total number of client records registered in the `Clientes` table — the store's full customer base.
+  </Card>
+</CardGroup>
+
+### Controller code
+
+The following method in `HomeController` runs all six database queries concurrently and also fetches the two detail lists used by the lower section of the page.
+
+```csharp
+[Authorize]
+[ResponseCache(Location = ResponseCacheLocation.None, NoStore = true)]
+public class HomeController : Controller
+{
+    private readonly AppDbContext _context;
+    public HomeController(AppDbContext context)
+    {
+        _context = context;
+    }
+
+    public async Task<IActionResult> Index()
+    {
+        var hoy = DateTime.Today;
+
+        ViewBag.TotalProductos        = await _context.Productos.CountAsync();
+        ViewBag.TotalClientes         = await _context.Clientes.CountAsync();
+        ViewBag.VentasHoy             = await _context.Ventas
+                                            .Where(v => v.FechaVenta.Date == hoy)
+                                            .CountAsync();
+        ViewBag.IngresoHoy            = await _context.Ventas
+                                            .Where(v => v.FechaVenta.Date == hoy)
+                                            .SumAsync(v => (decimal?)v.MontoTotal) ?? 0;
+        ViewBag.ProductosBajoStock    = await _context.Productos
+                                            .Where(p => p.Stock <= 10)
+                                            .CountAsync();
+        ViewBag.TotalVentas           = await _context.Ventas.CountAsync();
+
+        var ultimasVentas = await _context.Ventas
+            .Include(v => v.Cliente)
+            .OrderByDescending(v => v.FechaVenta)
+            .Take(5)
+            .ToListAsync();
+
+        ViewBag.UltimasVentas = ultimasVentas;
+
+        var productosBajoStock = await _context.Productos
+            .Include(p => p.Categoria)
+            .Where(p => p.Stock <= 10)
+            .OrderBy(p => p.Stock)
+            .Take(5)
+            .ToListAsync();
+
+        ViewBag.ListaProductosBajoStock = productosBajoStock;
+
+        return View();
+    }
+}
+```
+
+## Recent Sales Table
+
+Below the KPI cards, the left panel shows the **five most recent sales** ordered by `FechaVenta` descending. The table includes the following columns:
+
+| Column | Source field | Notes |
+|---|---|---|
+| **#** | `ID_Venta` | Auto-incremented sale ID |
+| **Cliente** | `Cliente.Nombres` + `Cliente.Apellidos` | Navigational property, eager-loaded via `Include` |
+| **Comprobante** | `TipoComprobante` | Receipt type — see badge rules below |
+| **Fecha** | `FechaVenta` | Formatted as `dd/MM/yyyy HH:mm` |
+| **Total** | `MontoTotal` | Formatted as `S/ 0.00` |
+
+**Receipt type badges** are applied inline in the Razor view:
+
+- **Boleta** → green (`badge-emerald`) badge
+- **Factura** → blue (`badge-blue`) badge
+
+When no sales exist yet, the panel displays an empty-state message: *"No hay ventas registradas aún"*.
+
+```html
+@foreach (var venta in (List<Final_proyecto.Models.Venta>)ViewBag.UltimasVentas)
+{
+    <tr>
+        <td>@venta.ID_Venta</td>
+        <td>@venta.Cliente?.Nombres @venta.Cliente?.Apellidos</td>
+        <td>
+            <span class="@(venta.TipoComprobante == "Factura" ? "badge-blue" : "badge-emerald")">
+                @venta.TipoComprobante
+            </span>
+        </td>
+        <td>@venta.FechaVenta.ToString("dd/MM/yyyy HH:mm")</td>
+        <td>S/ @venta.MontoTotal.ToString("N2")</td>
+    </tr>
+}
+```
+
+## Low Stock Alert Table
+
+The right panel shows up to **five products with the lowest stock levels**, sorted by `Stock` ascending so the most critical shortages appear first. All displayed products have `Stock ≤ 10`. The table columns are:
+
+| Column | Source field | Notes |
+|---|---|---|
+| **Producto** | `NombreProducto` | Product display name |
+| **Categoría** | `Categoria.NombreCategoria` | Eager-loaded; rendered with an amber badge |
+| **Stock** | `Stock` | Units on hand — colour-coded by severity |
+
+**Stock badge colour rules** mirror the thresholds used in the KPI card:
+
+| Condition | CSS class | Colour | Meaning |
+|---|---|---|---|
+| `Stock <= 5` | `stock-low` | Red | Critical — reorder immediately |
+| `Stock <= 10` | `stock-medium` | Amber | Low — plan a restock soon |
+
+When all products have sufficient stock the panel shows a green check-circle with the message *"Todos los productos tienen stock suficiente"*.
+
+<Tip>
+  The low-stock threshold is **10 units**. Any product at or below this level appears both in the **Stock Bajo** KPI card and in the alert table. Use the amber (≤ 10) and red (≤ 5) badges as a quick visual triage: red items should be reordered before the next business day, while amber items can be scheduled in the next regular purchase order.
+</Tip>
+
+## Sidebar Navigation
+
+The sidebar is rendered by `Views/Shared/_Layout.cshtml` and adapts its links based on the authenticated user's identity and role.
+
+<CardGroup cols={2}>
+  <Card title="Principal" icon="grid-2">
+    Always visible. Contains a single link:
+
+    - **Dashboard** → `/Home/Index`
+  </Card>
+  <Card title="Operaciones" icon="cart-check">
+    Visible to **all authenticated users**.
+
+    - **Ventas** → `/Venta/Lista`
+    - **Clientes** → `/Cliente/Lista`
+  </Card>
+  <Card title="Inventario" icon="box-seam">
+    Visible to **all authenticated users**.
+
+    - **Productos** → `/Producto/Lista`
+    - **Categorías** → `/Categoria/Lista`
+  </Card>
+  <Card title="Administración" icon="shield-lock">
+    Visible **only to users with the `Administrador` role** (`User.IsInRole("Administrador")`).
+
+    - **Usuarios** → `/Usuario/Lista`
+    - **Roles** → `/Rol/Lista`
+  </Card>
+</CardGroup>
+
+The sidebar footer shows the current user's avatar initial, their full name (from the `NomCompleto` claim), their role (from `ClaimTypes.Role`), and a logout button that calls `/Acceso/Logout`.
+
+```html
+@if (User.IsInRole("Administrador"))
+{
+    <div class="nav-section">Administración</div>
+    <a class="nav-link" asp-controller="Usuario" asp-action="Lista">
+        <i class="bi bi-person-gear"></i> Usuarios
+    </a>
+    <a class="nav-link" asp-controller="Rol" asp-action="Lista">
+        <i class="bi bi-shield-lock-fill"></i> Roles
+    </a>
+}
+```

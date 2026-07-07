@@ -1,0 +1,127 @@
+---
+title: "AccesoController Reference: Login, Logout, and Access Denied"
+sidebarTitle: "AccesoController"
+description: "Authentication routes — login with email and password, session setup, cookie sign-in, logout, and the access-denied page handler."
+---
+
+`AccesoController` is the authentication gateway for Tienda Mi Cholo. It handles displaying and processing the login form, setting up the ASP.NET Core cookie authentication principal and the server-side session, signing out, and rendering the access-denied page for users who attempt to reach a route their role does not permit. Unlike every other controller in the application, `AccesoController` does **not** carry a class-level `[Authorize]` attribute — the login and access-denied actions must be reachable by unauthenticated visitors. The default route configured in `Program.cs` points to `Acceso/Login`, so the login page is the application entry point.
+
+<Note>
+  All actions in this controller carry `[ResponseCache(Location = ResponseCacheLocation.None, NoStore = true)]`, which instructs the browser never to cache the response. This prevents a logged-out user from navigating back to a cached version of the login page.
+</Note>
+
+---
+
+## LoginVM Model
+
+The login form is bound to the `LoginVM` view model defined in `Final_proyecto.ViewModels`:
+
+```csharp
+namespace Final_proyecto.ViewModels
+{
+    public class LoginVM
+    {
+        public string Correo { get; set; }
+        public string Contraseña { get; set; }
+    }
+}
+```
+
+---
+
+## Actions
+
+### GET /Acceso/Login
+
+Renders the login form view. No authentication required.
+
+**Authorization:** Public (no `[Authorize]` attribute).
+
+---
+
+### POST /Acceso/Login
+
+Validates the submitted credentials, builds the cookie authentication principal, writes four session keys, and redirects the user to the home page on success.
+
+**Authorization:** Public (no `[Authorize]` attribute).
+
+<ParamField body="Correo" type="string" required>
+  The user's email address. Matched against `Usuario.CorreoUsuario` in the database.
+</ParamField>
+
+<ParamField body="Contraseña" type="string" required>
+  The user's password. Matched against `Usuario.Contraseña` in the database using a direct equality comparison.
+</ParamField>
+
+<Warning>
+  Passwords are stored and compared as **plain text**. There is no hashing or salting. This is only appropriate for development or internal-only deployments. Before exposing the application externally, replace the comparison with a proper password hashing scheme such as `BCrypt` or ASP.NET Core's `IPasswordHasher<T>`.
+</Warning>
+
+**Validation steps performed:**
+
+1. Query `Usuarios` (with `Rol` included) where `CorreoUsuario == loginVM.Correo` AND `Contraseña == loginVM.Contraseña`.
+2. If no match → sets `ViewData["Mensaje"] = "Correo o contraseña incorrectos"` and returns the login view.
+3. If `usuario.Estado == false` → sets `ViewData["Mensaje"] = "Su cuenta está desactivada. Contacte al administrador."` and returns the login view.
+
+**Claims written to the cookie principal on success:**
+
+```csharp
+var claims = new List<Claim>()
+{
+    new Claim(ClaimTypes.Name,  usuario.NomUsuario),
+    new Claim(ClaimTypes.Email, usuario.CorreoUsuario),
+    new Claim(ClaimTypes.Role,  usuario.Rol.NomRol),
+    new Claim("IdUsuario",      usuario.ID_Usuario.ToString()),
+    new Claim("NomCompleto",    usuario.NomCompleto)
+};
+```
+
+The principal is signed in with `CookieAuthenticationDefaults.AuthenticationScheme` and `IsPersistent = true`, `AllowRefresh = true`.
+
+**Session keys written on success:**
+
+| Key | Value |
+|-----|-------|
+| `"Usuario"` | `usuario.NomUsuario` |
+| `"NomCompleto"` | `usuario.NomCompleto` |
+| `"Rol"` | `usuario.Rol.NomRol` |
+| `"IdUsuario"` | `usuario.ID_Usuario` (stored as `int`) |
+
+<Note>
+  The `IdUsuario` session integer is read by `VentaController.Nueva` when recording which user created the sale: `HttpContext.Session.GetInt32("IdUsuario") ?? 1`.
+</Note>
+
+**On success:** Redirects to `GET /Home/Index`.
+
+---
+
+### GET /Acceso/Logout
+
+Clears all session data, signs out the cookie authentication scheme, and redirects the user back to the login page.
+
+**Authorization:** Authenticated users (implicitly — the middleware will redirect unauthenticated requests before reaching this action, though no explicit `[Authorize]` is present).
+
+```csharp
+HttpContext.Session.Clear();
+await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+return RedirectToAction(nameof(Login));
+```
+
+**On success:** Redirects to `GET /Acceso/Login`.
+
+---
+
+### GET /Acceso/AccesoDenegado
+
+Renders the access-denied view. This route is configured in `Program.cs` as the `AccessDeniedPath` for the cookie authentication scheme, so ASP.NET Core redirects here automatically whenever an authenticated user attempts to reach an action whose `[Authorize(Roles = "...")]` attribute does not include their role.
+
+**Authorization:** No explicit attribute — reached via ASP.NET Core's internal redirect for role failures.
+
+```csharp
+// Program.cs configuration
+.AddCookie(options =>
+{
+    options.LoginPath        = "/Acceso/Login";
+    options.AccessDeniedPath = "/Acceso/AccesoDenegado";
+});
+```

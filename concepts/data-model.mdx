@@ -1,0 +1,282 @@
+---
+title: "Data Model: Entities and Relationships"
+sidebarTitle: "Data Model"
+description: "Explore the seven core entities — Producto, Venta, DetalleVenta, Cliente, Usuario, Rol, and Categoria — and how they relate to each other."
+---
+
+Tienda Mi Cholo's persistence layer is built with **Entity Framework Core** targeting **SQL Server**. All entities are defined as plain C# classes decorated with `System.ComponentModel.DataAnnotations` attributes, and relationships are configured fluently inside `AppDbContext.OnModelCreating`. A single `AppDbContext` class (namespace `Final_proyecto.Data`) exposes seven `DbSet<T>` properties — one per entity — and carries all seed data so that a freshly-migrated database is immediately ready to use.
+
+## Entity Overview
+
+| Entity | DbSet | Description |
+|---|---|---|
+| `Rol` | `Roles` | Stores the three access roles (Administrador, Gerente, Cajero) that drive the entire permission system. |
+| `Usuario` | `Usuarios` | System accounts that can log in; each belongs to exactly one `Rol`. |
+| `Categoria` | `Categorias` | Product groupings (e.g., Lácteos, Bebidas) used to organise the inventory. |
+| `Producto` | `Productos` | Inventory items with purchase price, sale price, and stock count; linked to a `Categoria`. |
+| `Cliente` | `Clientes` | Buyer records identified by DNI or RUC; linked to every sale they make. |
+| `Venta` | `Ventas` | A completed sale transaction with a comprobante number, date, total, and the `Cliente` and `Usuario` that generated it. |
+| `DetalleVenta` | `DetalleVentas` | Individual line items inside a `Venta`, each referencing one `Producto` with a quantity and a frozen unit price. |
+
+## Entity Relationships
+
+All five relationships are configured in `AppDbContext.OnModelCreating` using the Fluent API. Each relationship is many-to-one from the child side.
+
+```csharp
+// Usuario → Rol  (many Usuarios share one Rol)
+modelBuilder.Entity<Usuario>()
+    .HasOne(u => u.Rol)
+    .WithMany(r => r.Usuarios)
+    .HasForeignKey(u => u.Rol_ID);
+
+// Producto → Categoria  (many Productos belong to one Categoria)
+modelBuilder.Entity<Producto>()
+    .HasOne(p => p.Categoria)
+    .WithMany(c => c.Productos)
+    .HasForeignKey(p => p.Categoria_ID);
+
+// Venta → Cliente  (many Ventas belong to one Cliente)
+modelBuilder.Entity<Venta>()
+    .HasOne(v => v.Cliente)
+    .WithMany(c => c.Ventas)
+    .HasForeignKey(v => v.Cliente_ID);
+
+// DetalleVenta → Venta  (many DetalleVentas belong to one Venta)
+modelBuilder.Entity<DetalleVenta>()
+    .HasOne(d => d.Venta)
+    .WithMany(v => v.Detalles)
+    .HasForeignKey(d => d.Venta_ID);
+
+// DetalleVenta → Producto  (many DetalleVentas reference one Producto)
+modelBuilder.Entity<DetalleVenta>()
+    .HasOne(d => d.Producto)
+    .WithMany(p => p.Detalles)
+    .HasForeignKey(d => d.Producto_ID);
+```
+
+The diagram below shows all seven entities and the foreign-key arrows between them:
+
+```
+┌──────────┐        ┌───────────┐        ┌────────────┐
+│   Rol    │◄───────│  Usuario  │        │  Categoria │
+│ ID_Rol   │ Rol_ID │ ID_Usuario│        │ ID_Categoria│
+└──────────┘        └───────────┘        └─────┬──────┘
+                                               │ Categoria_ID
+                                         ┌─────▼──────┐
+                         ┌───────────────│  Producto  │
+                         │ Producto_ID   │ ID_Producto│
+                         │               └────────────┘
+┌───────────┐     ┌──────▼──────┐
+│  Cliente  │◄────│    Venta    │
+│ ID_Cliente│     │  ID_Venta   │
+└───────────┘     └──────┬──────┘
+          Cliente_ID      │ Venta_ID
+                    ┌─────▼───────┐
+                    │ DetalleVenta│
+                    │ID_DetalleVenta│
+                    └─────────────┘
+```
+
+## Key Fields by Entity
+
+The four entities most central to daily operations are shown below with their exact C# model source code.
+
+### Producto
+
+```csharp
+public class Producto
+{
+    [Key, DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+    public int ID_Producto { get; set; }
+
+    [Required, StringLength(100)]
+    public string NombreProducto { get; set; }
+
+    [StringLength(200)]
+    public string? Descripcion { get; set; }
+
+    [Required]
+    [Column(TypeName = "decimal(10,2)")]
+    public decimal PrecioCompra { get; set; }
+
+    [Required]
+    [Column(TypeName = "decimal(10,2)")]
+    public decimal PrecioVenta { get; set; }
+
+    [Required]
+    public int Stock { get; set; }
+
+    public bool Estado { get; set; } = true;
+
+    public int Categoria_ID { get; set; }
+    public Categoria? Categoria { get; set; }
+
+    public ICollection<DetalleVenta>? Detalles { get; set; }
+}
+```
+
+<Info>
+  `Estado` defaults to `true` when a product is created. Administrators and Gerentes can toggle it via `Producto/CambiarEstado`. Products with `Estado = false` are excluded from the point-of-sale product search so cashiers can never add inactive items to a sale.
+</Info>
+
+### Venta
+
+```csharp
+public class Venta
+{
+    [Key, DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+    public int ID_Venta { get; set; }
+
+    [Required, StringLength(20)]
+    public string TipoComprobante { get; set; } // "Boleta" or "Factura"
+
+    [Required, StringLength(20)]
+    public string NumeroComprobante { get; set; } // e.g. "B001-00000001"
+
+    [Required]
+    public DateTime FechaVenta { get; set; }
+
+    [Required]
+    [Column(TypeName = "decimal(10,2)")]
+    public decimal MontoTotal { get; set; }
+
+    public int Cliente_ID { get; set; }
+    public Cliente Cliente { get; set; }
+
+    public int Usuario_ID { get; set; }
+
+    public ICollection<DetalleVenta> Detalles { get; set; }
+}
+```
+
+<Info>
+  `NumeroComprobante` is auto-generated using a correlative counter at save time. Boletas receive the prefix `B001-` and Facturas receive `F001-`, followed by an 8-digit zero-padded sequence number (e.g., `B001-00000042`).
+</Info>
+
+### Cliente
+
+```csharp
+public class Cliente
+{
+    [Key, DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+    public int ID_Cliente { get; set; }
+
+    [Required, StringLength(50)]
+    [RegularExpression(@"^[a-zA-ZáéíóúÁÉÍÓÚñÑüÜ\s]+$",
+        ErrorMessage = "Los nombres solo deben contener letras.")]
+    public string Nombres { get; set; }
+
+    [Required, StringLength(50)]
+    [RegularExpression(@"^[a-zA-ZáéíóúÁÉÍÓÚñÑüÜ\s]+$",
+        ErrorMessage = "Los apellidos solo deben contener letras.")]
+    public string Apellidos { get; set; }
+
+    [Required, StringLength(10)]
+    public string TipoDocumento { get; set; } // "DNI" or "RUC"
+
+    [Required, StringLength(11)]
+    [RegularExpression(@"^\d{8}$|^(10|20)\d{9}$",
+        ErrorMessage = "DNI debe tener 8 dígitos o RUC debe tener 11 dígitos y empezar con 10 o 20")]
+    public string NumeroDocumento { get; set; }
+
+    [Required, StringLength(9)]
+    [RegularExpression(@"^(?!(\d)\1{8})9\d{8}$",
+        ErrorMessage = "El teléfono debe tener 9 dígitos, empezar con 9 y no ser un número repetido")]
+    public string Telefono { get; set; }
+
+    [StringLength(100)]
+    public string? Correo { get; set; }
+
+    [StringLength(200)]
+    public string? Direccion { get; set; }
+
+    public ICollection<Venta>? Ventas { get; set; }
+}
+```
+
+### DetalleVenta
+
+```csharp
+public class DetalleVenta
+{
+    [Key, DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+    public int ID_DetalleVenta { get; set; }
+
+    [Required]
+    public int Cantidad { get; set; }
+
+    [Required]
+    [Column(TypeName = "decimal(10,2)")]
+    public decimal PrecioUnitario { get; set; }
+
+    [Required]
+    [Column(TypeName = "decimal(10,2)")]
+    public decimal Subtotal { get; set; }
+
+    public int Producto_ID { get; set; }
+    public Producto Producto { get; set; }
+
+    public int Venta_ID { get; set; }
+    public Venta Venta { get; set; }
+}
+```
+
+<Tip>
+  `Subtotal` is calculated by `VentaController` before persisting each line item: `subtotal = cant * precios[i]`. It stores the computed value directly so that historical sale details remain accurate even if a product's `PrecioVenta` changes later. `MontoTotal` on the parent `Venta` is the sum of all `Subtotal` values in its `Detalles` collection.
+</Tip>
+
+## Seeded Data
+
+The following records are inserted by `AppDbContext.OnModelCreating` using EF Core's `HasData` API. They are present in every environment after running `dotnet ef database update`.
+
+### Roles
+
+| ID\_Rol | NomRol |
+|:---:|---|
+| 1 | Administrador |
+| 2 | Gerente |
+| 3 | Cajero |
+
+### Default Admin User
+
+| Field | Value |
+|---|---|
+| `ID_Usuario` | 1 |
+| `NomCompleto` | Administrador del Sistema |
+| `NomUsuario` | admin |
+| `CorreoUsuario` | admin@micholo.com |
+| `Contraseña` | admin123 |
+| `Estado` | `true` |
+| `Rol_ID` | 1 (Administrador) |
+
+<Warning>
+  The default admin password (`admin123`) is stored in plain text in the seed data. Change it immediately after the first deployment via the user-management interface (`/Usuario/Editar/1`).
+</Warning>
+
+### Default Client
+
+A fallback **Público General** client (ID = 1) is seeded so that walk-in Boleta sales can be completed without registering the buyer.
+
+| Field | Value |
+|---|---|
+| `ID_Cliente` | 1 |
+| `Nombres` | Público |
+| `Apellidos` | General |
+| `TipoDocumento` | DNI |
+| `NumeroDocumento` | 00000000 |
+| `Telefono` | 900000000 |
+| `Correo` | publico@general.com |
+| `Direccion` | Tienda Principal |
+
+### Product Categories
+
+Six categories are seeded to cover a typical neighbourhood grocery store's inventory:
+
+| ID\_Categoria | NombreCategoria | Descripcion |
+|:---:|---|---|
+| 1 | Lácteos | Leche, queso, yogurt y derivados |
+| 2 | Bebidas | Gaseosas, jugos, agua y bebidas |
+| 3 | Snacks | Galletas, papas, dulces y golosinas |
+| 4 | Limpieza | Detergentes, lejía, jabones |
+| 5 | Abarrotes | Arroz, azúcar, aceite, fideos |
+| 6 | Frutas y Verduras | Productos frescos del día |

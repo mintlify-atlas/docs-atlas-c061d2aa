@@ -1,0 +1,222 @@
+---
+title: "Product Catalog: Stock, Pricing, and Status Management"
+sidebarTitle: "Products"
+description: "Manage the store product catalog — add products with purchase and sale prices, track stock levels, toggle active status, and search with pagination."
+---
+
+The **Products** module is the heart of Tienda Mi Cholo's inventory system. It stores every item sold at the point of sale, along with its purchase cost, sale price, current stock level, and active/inactive status. All authenticated users can browse the product list; creating, editing, deleting, and toggling the status of products is restricted to the **Administrador** and **Gerente** roles.
+
+---
+
+## Product Fields
+
+Each product in the system carries the following fields, as defined in the `Producto` model:
+
+<ParamField path="NombreProducto" type="string" required>
+  The display name of the product. Maximum **100 characters**. Shown in the product list, the POS search, and every sale detail line.
+</ParamField>
+
+<ParamField path="Descripcion" type="string">
+  An optional short description of the product. Maximum **200 characters**. Appears as a subtitle under the product name in the list view and is also matched when using the search bar.
+</ParamField>
+
+<ParamField path="PrecioCompra" type="decimal(10,2)" required>
+  The purchase cost paid to the supplier, stored as a decimal with two decimal places (e.g., `S/ 3.50`). Used to calculate margins and to enforce the pricing validation rule.
+</ParamField>
+
+<ParamField path="PrecioVenta" type="decimal(10,2)" required>
+  The retail sale price charged to customers. Must be **greater than or equal to** `PrecioCompra`. The controller rejects any submission where `PrecioVenta < PrecioCompra` with the error: *"El precio de venta no puede ser menor al precio de compra."*
+</ParamField>
+
+<ParamField path="Stock" type="int" required>
+  The current quantity of units available in inventory. Decremented automatically when a sale is completed through the POS. The list view shows colored badges based on the stock level — see [Stock Level Indicators](#stock-level-indicators) below.
+</ParamField>
+
+<ParamField path="Estado" type="bool" default="true">
+  Controls whether the product is active (`true`) or inactive (`false`). New products are always saved as active. Only products with `Estado = true` **and** `Stock > 0` appear in the POS product search. Toggle this field using the **Activar / Desactivar** button in the list — no form editing required.
+</ParamField>
+
+<ParamField path="Categoria_ID" type="int" required>
+  Foreign key referencing the `Categoria` table. A product must belong to exactly one category. The create/edit form loads all categories from the database as a dropdown.
+</ParamField>
+
+---
+
+## Searching and Pagination
+
+The product list supports full-text search across both `NombreProducto` and `Descripcion`. Results are paginated at **15 products per page**, ordered by `ID_Producto`.
+
+**URL pattern:**
+
+```
+/Producto/Lista?buscar=arroz&pagina=2
+```
+
+| Query Parameter | Type   | Description                                                              |
+|-----------------|--------|--------------------------------------------------------------------------|
+| `buscar`        | string | Optional. Filters products whose name **or** description contains the value. Case-insensitive on SQL Server. |
+| `pagina`        | int    | Optional. The page number to display. Defaults to `1`. Automatically clamped to the last available page. |
+
+The controller builds the query as follows — search and pagination are applied before the database round-trip:
+
+```csharp
+IQueryable<Producto> query = _context.Productos.Include(e => e.Categoria);
+
+if (!string.IsNullOrWhiteSpace(buscar))
+{
+    buscar = buscar.Trim();
+    query = query.Where(p => p.NombreProducto.Contains(buscar)
+                          || p.Descripcion.Contains(buscar));
+}
+
+int totalRecords = await query.CountAsync();
+int totalPages   = (int)Math.Ceiling((double)totalRecords / pageSize);
+if (totalPages > 0 && pagina > totalPages) pagina = totalPages;
+
+List<Producto> lista = await query
+    .OrderBy(p => p.ID_Producto)
+    .Skip((pagina - 1) * pageSize)
+    .Take(pageSize)
+    .ToListAsync();
+```
+
+The view renders a sliding window of up to **5 page buttons** with previous/next arrows. When a search term is active, pagination links carry the `buscar` parameter so the filter is preserved across pages.
+
+---
+
+## Stock Level Indicators
+
+The product list highlights each product's `Stock` value with a colored badge so staff can identify inventory problems at a glance.
+
+| Condition      | Badge color | Meaning                                           |
+|----------------|-------------|---------------------------------------------------|
+| `Stock <= 5`   | 🔴 Red      | **Critical** — reorder immediately.               |
+| `Stock <= 10`  | 🟡 Amber    | **Low** — reorder soon.                           |
+| `Stock > 10`   | 🟢 Green    | **OK** — sufficient inventory.                    |
+
+<Note>
+  The dashboard's low-stock summary table also surfaces any product with `Stock <= 10`, giving managers a quick overview without opening the full product list.
+</Note>
+
+---
+
+## Activating and Deactivating Products
+
+Every product row in the list exposes a toggle button that flips the `Estado` field between `true` (active) and `false` (inactive) with a single click. No confirmation dialog is shown — the change takes effect immediately.
+
+**Endpoint:**
+
+```
+POST /Producto/CambiarEstado/{id}
+```
+
+The controller reads the current value and inverts it:
+
+```csharp
+[Authorize(Roles = "Administrador,Gerente")]
+[HttpPost]
+public async Task<IActionResult> CambiarEstado(int id)
+{
+    Producto producto = await _context.Productos.FirstAsync(d => d.ID_Producto == id);
+    producto.Estado = !producto.Estado;
+    _context.Productos.Update(producto);
+    await _context.SaveChangesAsync();
+    return RedirectToAction(nameof(Lista));
+}
+```
+
+**Effect on the POS:** A product only appears in the point-of-sale product search when **both** conditions are met:
+
+- `Estado == true` (product is active)
+- `Stock > 0` (at least one unit is available)
+
+Inactive products (`Estado = false`) are hidden from the POS even if stock is available.
+
+<Note>
+  **Deactivating is safer than deleting.** If a product already has sales history (records in `DetalleVenta`), deactivating it preserves all historical data and prevents referential integrity errors. The product simply stops appearing at the checkout without removing any records from the database.
+</Note>
+
+---
+
+## Creating a Product
+
+<Steps>
+  <Step title="Open the New Product form">
+    Click **Nuevo Producto** from the top-right corner of the product list. This button is only visible to **Administrador** and **Gerente** users.
+  </Step>
+  <Step title="Fill in the product details">
+    Complete all required fields in the form:
+
+    - **Nombre del Producto** — unique, descriptive name (e.g., *Arroz Extra 5kg*).
+    - **Categoría** — select one category from the dropdown. The list is loaded live from the `Categorias` table.
+    - **Descripción** — optional; a short description visible in the list and matched during search.
+    - **Precio Compra** — supplier cost in Soles (e.g., `3.50`).
+    - **Precio Venta** — retail price in Soles. Must be ≥ Precio Compra.
+    - **Stock Inicial** — number of units currently in stock (minimum `0`).
+  </Step>
+  <Step title="Validate and save">
+    The form validates the price rule client-side before submission. The controller also enforces it server-side:
+
+    ```csharp
+    if (producto.PrecioVenta < producto.PrecioCompra)
+    {
+        ModelState.AddModelError("",
+            "El precio de venta no puede ser menor al precio de compra.");
+    }
+    ```
+
+    If validation passes, the product is saved with `Estado = true` and the user is redirected to the product list.
+  </Step>
+</Steps>
+
+<CardGroup cols={2}>
+  <Card title="Required fields" icon="asterisk">
+    `NombreProducto`, `PrecioCompra`, `PrecioVenta`, `Stock`, and `Categoria_ID` are all required. The form will not submit if any of these are empty.
+  </Card>
+  <Card title="Precio de venta rule" icon="scale-balanced">
+    `PrecioVenta` must be ≥ `PrecioCompra`. Both the browser (JavaScript) and the server (`ModelState`) enforce this rule independently.
+  </Card>
+</CardGroup>
+
+---
+
+## Deleting a Product
+
+The **Eliminar** button is available in the product list row for **Administrador** and **Gerente** users. A JavaScript confirmation dialog appears before the deletion is processed.
+
+**Endpoint:**
+
+```
+GET /Producto/Eliminar/{id}
+```
+
+```csharp
+[Authorize(Roles = "Administrador,Gerente")]
+[HttpGet]
+public async Task<IActionResult> Eliminar(int id)
+{
+    Producto producto = await _context.Productos.FirstAsync(d => d.ID_Producto == id);
+    _context.Productos.Remove(producto);
+    await _context.SaveChangesAsync();
+    return RedirectToAction(nameof(Lista));
+}
+```
+
+<Warning>
+  **Deletion is permanent and cannot be undone.** If the product has associated sale records (`DetalleVenta`), deleting it will cause a **referential integrity error** in SQL Server and the operation will fail. Always prefer **deactivating** a product (`CambiarEstado`) over deleting it — the product will be hidden from the POS while its sales history remains intact.
+</Warning>
+
+---
+
+## Access Control Summary
+
+| Operation                         | Roles allowed                        |
+|-----------------------------------|--------------------------------------|
+| View product list (`Lista`)       | All authenticated users              |
+| Search products                   | All authenticated users              |
+| Create product (`Nuevo`)          | Administrador, Gerente               |
+| Edit product (`Editar`)           | Administrador, Gerente               |
+| Toggle status (`CambiarEstado`)   | Administrador, Gerente               |
+| Delete product (`Eliminar`)       | Administrador, Gerente               |
+
+All controller actions are protected by `[Authorize]` at the class level. Privileged actions additionally carry `[Authorize(Roles = "Administrador,Gerente")]`. Unauthenticated requests are redirected to the login page automatically.

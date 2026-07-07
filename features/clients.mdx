@@ -1,0 +1,206 @@
+---
+title: "Client Management: Register and Track Customers"
+sidebarTitle: "Clients"
+description: "Register clients with DNI or RUC document validation, manage contact details, and associate customers with Boleta or Factura sales transactions."
+---
+
+The Clients module is the foundation of the sales workflow in Tienda Mi Cholo S.A.C. Every sale must be linked to a registered client — for walk-in customers without a formal record, the system provides a seeded **Público General** client (ID 1) that acts as the default recipient for anonymous Boleta transactions. Named clients can be registered with a DNI or RUC, a phone number, and optional contact details, allowing the system to maintain a full purchase history per customer and issue properly addressed Facturas. All authenticated users can view the client list, while registration is available to Cajeros and above, and editing or deletion is restricted to Administradores and Gerentes.
+
+---
+
+## Client Fields
+
+<ParamField path="Nombres" type="string" required>
+  First name(s) of the client. Maximum 50 characters. Must contain only letters, including accented characters (á, é, í, ó, ú, ñ, ü) and spaces — numbers or special characters are rejected.
+</ParamField>
+
+<ParamField path="Apellidos" type="string" required>
+  Last name(s) of the client. Maximum 50 characters. Subject to the same letters-only constraint as `Nombres`.
+</ParamField>
+
+<ParamField path="TipoDocumento" type="string" required>
+  Type of identity document. Accepted values are `"DNI"` or `"RUC"`. The selected type determines the exact format requirements applied to `NumeroDocumento`.
+</ParamField>
+
+<ParamField path="NumeroDocumento" type="string" required>
+  The document number. Maximum 11 characters. The required format is enforced both by a model-level `RegularExpression` attribute and by explicit controller-side length and prefix checks. See [Document Validation Rules](#document-validation-rules).
+</ParamField>
+
+<ParamField path="Telefono" type="string" required>
+  Peruvian mobile phone number. Exactly 9 digits, must begin with `9`. Repeated-digit patterns (e.g., `999999999`) are rejected. See [Phone Validation](#phone-validation).
+</ParamField>
+
+<ParamField path="Correo" type="string">
+  Optional email address for the client. Maximum 100 characters. The field is nullable (`string?`) and the form renders a standard `type="email"` input.
+</ParamField>
+
+<ParamField path="Direccion" type="string">
+  Optional physical address. Maximum 200 characters. Nullable (`string?`).
+</ParamField>
+
+---
+
+## Document Validation Rules
+
+Validation is applied in two layers: the `NumeroDocumento` model property carries a `[RegularExpression]` attribute, and the `ClienteController.Nuevo` and `ClienteController.Editar` POST actions re-validate the combination of `TipoDocumento` and `NumeroDocumento` before any database write occurs.
+
+<Tabs>
+  <Tab title="DNI">
+    A DNI (Documento Nacional de Identidad) is issued to natural persons by RENIEC.
+
+    **Rules:**
+    - Exactly **8 digits** — no letters, no special characters.
+    - The controller rejects the submission with `"El DNI debe tener exactamente 8 dígitos"` if the length differs.
+
+    **Regex (model-level):**
+    ```csharp
+    [RegularExpression(@"^\d{8}$|^(10|20)\d{9}$",
+        ErrorMessage = "DNI debe tener 8 dígitos o RUC debe tener 11 dígitos y empezar con 10 o 20")]
+    public string NumeroDocumento { get; set; }
+    ```
+
+    **Client-side helper text (Nuevo.cshtml):**
+    ```
+    DNI: Exactamente 8 dígitos
+    ```
+  </Tab>
+  <Tab title="RUC">
+    A RUC (Registro Único de Contribuyentes) is issued by SUNAT to entities and natural persons engaged in economic activity.
+
+    **Rules:**
+    - Exactly **11 digits**.
+    - Must start with `10` (persona natural con negocio) or `20` (empresa / persona jurídica).
+    - The controller returns `"El RUC debe tener exactamente 11 dígitos"` or `"El RUC debe empezar con 10 (persona natural) o 20 (empresa)"` as appropriate.
+
+    **Controller-side checks (`ClienteController.cs`):**
+    ```csharp
+    if (cliente.TipoDocumento == "RUC")
+    {
+        if (cliente.NumeroDocumento.Length != 11)
+        {
+            ViewData["Mensaje"] = "El RUC debe tener exactamente 11 dígitos";
+            return View(cliente);
+        }
+        if (!cliente.NumeroDocumento.StartsWith("10") && !cliente.NumeroDocumento.StartsWith("20"))
+        {
+            ViewData["Mensaje"] = "El RUC debe empezar con 10 (persona natural) o 20 (empresa)";
+            return View(cliente);
+        }
+    }
+    ```
+
+    **Client-side helper text (Nuevo.cshtml):**
+    ```
+    RUC: 11 dígitos, empieza con 10 o 20
+    ```
+  </Tab>
+</Tabs>
+
+---
+
+## Phone Validation
+
+The `Telefono` field enforces the standard Peruvian mobile number format via a regular expression defined directly on the `Cliente` model.
+
+```csharp
+[Required, StringLength(9)]
+[RegularExpression(@"^(?!(\d)\1{8})9\d{8}$",
+    ErrorMessage = "El teléfono debe tener 9 dígitos, empezar con 9 y no ser un número repetido como 999999999")]
+public string Telefono { get; set; }
+```
+
+The regex `^(?!(\d)\1{8})9\d{8}$` breaks down as follows:
+
+| Component | Meaning |
+|-----------|---------|
+| `^` | Start of string |
+| `(?!(\d)\1{8})` | Negative lookahead — rejects strings where all 9 digits are identical (e.g., `999999999`, `111111111`) |
+| `9` | Number must begin with the digit `9` |
+| `\d{8}` | Followed by exactly 8 more digits |
+| `$` | End of string |
+
+The client-side `validarCliente()` function in `Nuevo.cshtml` applies equivalent JavaScript checks before form submission:
+
+```javascript
+// Step 1 — must match 9XXXXXXXX
+var telRegex = /^9\d{8}$/;
+if (!telRegex.test(tel)) { /* show error */ return false; }
+
+// Step 2 — reject all-same-digit patterns
+if (/^(\d)\1{8}$/.test(tel)) { /* show error */ return false; }
+```
+
+<Tip>
+  The input field in `Nuevo.cshtml` is restricted with `maxlength="9"` and filters non-numeric keystrokes in real time via an `input` event listener, so users cannot accidentally type letters or exceed the length limit.
+</Tip>
+
+---
+
+## Duplicate Detection
+
+Before inserting a new client record, the controller queries the database with `AnyAsync` to ensure no existing client already holds the submitted `NumeroDocumento`:
+
+```csharp
+// ClienteController.cs — Nuevo (POST)
+var existe = await _context.Clientes.AnyAsync(c => c.NumeroDocumento == cliente.NumeroDocumento);
+if (existe)
+{
+    ViewData["Mensaje"] = "Ya existe un cliente con ese número de documento";
+    return View(cliente);
+}
+```
+
+<Note>
+  This duplicate check is performed **only on create** (`Nuevo`). The `Editar` POST action does not re-run the `AnyAsync` check, so editing a client's document number to match an existing record is not blocked at the controller level. Enforce uniqueness at the database layer (unique index on `NumeroDocumento`) for complete protection.
+</Note>
+
+---
+
+## Público General (Default Client)
+
+The database seeder creates a special client record at application startup:
+
+| Field | Value |
+|-------|-------|
+| `ID_Cliente` | `1` |
+| `Nombres` | `Público` |
+| `Apellidos` | `General` |
+| `TipoDocumento` | `DNI` |
+| `NumeroDocumento` | `00000000` |
+
+This record exists so that cashiers can process **Boleta** sales without requiring the customer to provide identification. When creating a new sale of type Boleta without selecting a named client, the system automatically associates the transaction with `ID_Cliente = 1`.
+
+<Warning>
+  Do **not** delete or modify the Público General record. Removing it will cause all anonymous Boleta sales to fail at the point of client lookup. Do not use it as a template or reassign its `NumeroDocumento` — it must remain `00000000` to be distinguishable from real registrations.
+</Warning>
+
+---
+
+## Access Control
+
+| Action | Roles |
+|--------|-------|
+| View client list (`Lista`) | All authenticated users (`[Authorize]` at controller level) |
+| Register a new client (`Nuevo`) | Administrador, Gerente, Cajero |
+| Edit an existing client (`Editar`) | Administrador, Gerente |
+| Delete a client (`Eliminar`) | Administrador, Gerente |
+
+The controller-level `[Authorize]` attribute ensures that unauthenticated visitors are redirected to the login page before they can reach any client action. More granular role restrictions are applied per action:
+
+```csharp
+[Authorize]
+public class ClienteController : Controller
+{
+    // All authenticated users can view the list
+    public async Task<IActionResult> Lista() { ... }
+
+    [Authorize(Roles = "Administrador,Gerente,Cajero")]
+    public IActionResult Nuevo() { ... }
+
+    [Authorize(Roles = "Administrador,Gerente")]
+    public async Task<IActionResult> Editar(int id) { ... }
+
+    [Authorize(Roles = "Administrador,Gerente")]
+    public async Task<IActionResult> Eliminar(int id) { ... }
+}
+```

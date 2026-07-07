@@ -1,0 +1,154 @@
+---
+title: "Configure Tienda Mi Cholo S.A.C for Your Environment"
+sidebarTitle: "Configuration"
+description: "Set up the SQL Server connection string, session timeout, authentication cookies, and environment-specific settings for development and production."
+---
+
+Tienda Mi Cholo S.A.C uses two configuration files to manage environment-specific settings. **`appsettings.json`** holds the production defaults that are always loaded, and **`appsettings.Development.json`** holds overrides that are merged on top when the `ASPNETCORE_ENVIRONMENT` variable is set to `Development` (the default when running via `dotnet run` or Visual Studio). Values in `appsettings.Development.json` always win over the same keys in `appsettings.json`, so you can safely customize logging, connection strings, or any other setting for local work without touching the production config.
+
+## Connection String
+
+The application reads its database connection from the `CadenaSQL` key inside the `ConnectionStrings` section of `appsettings.json`. This is the value shipped with the repository:
+
+```json
+{
+  "ConnectionStrings": {
+    "CadenaSQL": "Data Source=(localdb)\\MSSQLLocalDB;Initial Catalog=TIENDA_MICHOLO;Trusted_Connection=True;TrustServerCertificate=True;"
+  }
+}
+```
+
+Each component controls a specific aspect of the SQL Server connection:
+
+| Component | Value | Purpose |
+|---|---|---|
+| `Data Source` | `(localdb)\\MSSQLLocalDB` | The SQL Server instance to connect to. For LocalDB this is the default automatic instance; for a named instance use `.\SQLEXPRESS` or a full hostname. |
+| `Initial Catalog` | `TIENDA_MICHOLO` | The database name. EF Core migrations will create this database if it does not exist. |
+| `Trusted_Connection` | `True` | Use Windows Integrated Authentication (the current Windows user credentials). Set to `False` when using SQL login credentials. |
+| `TrustServerCertificate` | `True` | Skip TLS certificate validation. Necessary for LocalDB and self-signed certificates in dev. Should be `False` with a properly signed cert in production. |
+
+**Switching to a full SQL Server instance** — replace the `CadenaSQL` value with a standard SQL authentication connection string:
+
+```json
+{
+  "ConnectionStrings": {
+    "CadenaSQL": "Data Source=myserver\\SQLEXPRESS;Initial Catalog=TIENDA_MICHOLO;User Id=tienda_user;Password=YourStrongPassword!;TrustServerCertificate=False;"
+  }
+}
+```
+
+<Tip>
+  For local development, keep overrides in `appsettings.Development.json` so you never accidentally commit a production password to source control. Add `appsettings.Production.json` to `.gitignore` and supply it only on the server.
+</Tip>
+
+## Session Configuration
+
+Session behaviour is configured in `Program.cs` using `builder.Services.AddSession`. The following options are set:
+
+```csharp
+builder.Services.AddSession(options =>
+{
+    options.IdleTimeout = TimeSpan.FromMinutes(30);
+    options.Cookie.HttpOnly = true;
+    options.Cookie.IsEssential = true;
+});
+```
+
+| Option | Value | Effect |
+|---|---|---|
+| `IdleTimeout` | `TimeSpan.FromMinutes(30)` | A session expires after 30 minutes of inactivity. Any request that carries the session cookie resets the timer. |
+| `Cookie.HttpOnly` | `true` | The session cookie is inaccessible to JavaScript, protecting it from XSS attacks. |
+| `Cookie.IsEssential` | `true` | Marks the cookie as essential so it is set even when the user has not consented to non-essential cookies (relevant if you add a GDPR cookie consent banner). |
+
+**Adjusting `IdleTimeout` for cashier workflows** — the default 30-minute window suits a typical cashier station where staff take short breaks. If your store has longer idle periods between customers (e.g. a warehouse counter open only part of the day), increase the timeout to avoid forcing re-login during a shift:
+
+```csharp
+options.IdleTimeout = TimeSpan.FromHours(8); // full shift without re-login
+```
+
+Conversely, for higher-security environments (e.g. a shared terminal accessible by multiple staff), reduce the timeout to 5–10 minutes to enforce re-authentication after short periods of inactivity.
+
+## Authentication Paths
+
+Cookie authentication is registered in `Program.cs` with two explicit redirect paths:
+
+```csharp
+builder.Services.AddAuthentication(
+    CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddCookie(options =>
+    {
+        options.LoginPath = "/Acceso/Login";
+        options.AccessDeniedPath = "/Acceso/AccesoDenegado";
+    });
+```
+
+| Option | Path | Behaviour |
+|---|---|---|
+| `LoginPath` | `/Acceso/Login` | Any unauthenticated request to a protected route is redirected here. After successful login, ASP.NET Core automatically redirects back to the originally requested URL via the `ReturnUrl` query parameter. |
+| `AccessDeniedPath` | `/Acceso/AccesoDenegado` | Any authenticated request that fails an authorization check (e.g. a Cajero attempting to access the user management area) is redirected here instead of returning a plain 403 response. |
+
+These paths correspond to actions on the `AccesoController`. If you rename or move that controller, update both values accordingly.
+
+## Logging
+
+Logging levels are controlled by the `Logging.LogLevel` section in `appsettings.json`:
+
+```json
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  }
+}
+```
+
+| Key | Level | Effect |
+|---|---|---|
+| `Default` | `Information` | All application code logs at `Information` and above (i.e. `Information`, `Warning`, `Error`, `Critical`) are written to the configured providers (console by default). |
+| `Microsoft.AspNetCore` | `Warning` | Framework-level request pipeline logs are suppressed below `Warning`, keeping the console clean of routine HTTP traffic noise during development. |
+
+The `appsettings.Development.json` file carries the same logging configuration as the root file — no overrides are applied in development by default:
+
+```json
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  }
+}
+```
+
+To enable verbose EF Core SQL query logging during development, add the following override to `appsettings.Development.json`:
+
+```json
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning",
+      "Microsoft.EntityFrameworkCore.Database.Command": "Information"
+    }
+  }
+}
+```
+
+This outputs every SQL statement executed by EF Core to the console — useful for diagnosing slow queries or unexpected N+1 problems, but far too noisy for production.
+
+## Production Checklist
+
+Before deploying Tienda Mi Cholo S.A.C to a production or internet-facing environment, complete every item on this list:
+
+<Warning>
+  **Production deployment requires these changes before going live:**
+
+  - **Change the admin credentials** — Log in with `admin@micholo.com` / `admin123` and immediately update the email, full name, and password to values that cannot be guessed. These seed values are publicly documented.
+  - **Use SQL Server authentication with a strong password** — Remove `Trusted_Connection=True` from the connection string and create a dedicated SQL login with a strong password (20+ characters, mixed case, numbers, symbols). Restrict that login's permissions to only the `TIENDA_MICHOLO` database.
+  - **Set `TrustServerCertificate=False`** — Obtain a properly signed TLS certificate for your SQL Server instance and disable certificate trust bypass.
+  - **Restrict `AllowedHosts`** — Replace the wildcard `"AllowedHosts": "*"` in `appsettings.json` with your actual domain (e.g. `"tiendamicholo.com"`). This enables ASP.NET Core's host-header filtering to block requests from unknown hostnames.
+  - **Configure HTTPS** — Run behind a reverse proxy (IIS, nginx, or Caddy) that terminates TLS, and add `app.UseHsts()` + `app.UseHttpsRedirection()` to `Program.cs` for production. The current `Program.cs` only calls `app.UseExceptionHandler` for non-Development environments.
+  - **Protect `appsettings.json`** — Never commit production connection strings or passwords to source control. Use environment variables, ASP.NET Core's Secret Manager, or a secrets vault (e.g. Azure Key Vault) for sensitive values in production.
+</Warning>

@@ -1,0 +1,118 @@
+---
+title: "Sale Detail View: Line Items and Totals"
+sidebarTitle: "Sale Detail"
+description: "The sale detail page shows all line items, unit prices, quantities, subtotals, client information, and the receipt number for a completed sale."
+---
+
+The sale detail page is a read-only summary of a single completed transaction. It presents the full receipt header — voucher number, receipt type, emission date and time, and client information — alongside an itemized table of every product sold, the quantity purchased, the unit price captured at the moment of sale, and the calculated subtotal for each line. Every authenticated user regardless of role can access this page, making it useful for cashiers who need to verify a receipt as well as managers reviewing transaction history.
+
+## What's Displayed
+
+The detail view is divided into two visual areas. The upper area contains the receipt header information and the grand total, while the lower area holds the product line-item table.
+
+**Receipt header fields:**
+
+| Field | Source | Example |
+|---|---|---|
+| Tipo de Comprobante | `Venta.TipoComprobante` | Boleta / Factura (color-coded badge) |
+| Nro. Comprobante | `Venta.NumeroComprobante` | `B001-00000003` / `F001-00000001` |
+| Cliente | `Venta.Cliente.Nombres` + `.Apellidos` | `Juan Pérez` / `Inversiones Mi Cholo S.A.C.` |
+| Tipo/Nro. Documento | `Cliente.TipoDocumento` + `.NumeroDocumento` | `DNI: 45821693` / `RUC: 20147852369` |
+| Teléfono | `Cliente.Telefono` | `987654321` (shown only when non-empty) |
+| Fecha y Hora de Emisión | `Venta.FechaVenta` | `15/06/2025 14:32:07` |
+| Monto Total | `Venta.MontoTotal` | `S/ 127.50` |
+
+The **Monto Total** is displayed prominently as a stat card with large typography, along with a count of how many distinct product lines (`Detalles?.Count`) the sale contains.
+
+**Line-item table columns:**
+
+| Column | Source field | Notes |
+|---|---|---|
+| `#` | Row counter | Sequential starting at 1 |
+| Producto | `DetalleVenta.Producto.NombreProducto` | Loaded via `ThenInclude(d => d.Producto)` |
+| Cantidad | `DetalleVenta.Cantidad` | Units sold |
+| Precio Unit. | `DetalleVenta.PrecioUnitario` | Price at time of sale — see note below |
+| Subtotal | `DetalleVenta.Subtotal` | `Cantidad × PrecioUnitario` |
+
+## Line Item Details
+
+Each row in the line-item table corresponds to one `DetalleVenta` record. The `DetalleVenta` model exposes the following persisted fields:
+
+```csharp
+public class DetalleVenta
+{
+    [Key, DatabaseGenerated(DatabaseGeneratedOption.Identity)]
+    public int ID_DetalleVenta { get; set; }
+
+    [Required]
+    public int Cantidad { get; set; }
+
+    [Required]
+    [Column(TypeName = "decimal(10,2)")]
+    public decimal PrecioUnitario { get; set; }
+
+    [Required]
+    [Column(TypeName = "decimal(10,2)")]
+    public decimal Subtotal { get; set; }
+
+    public int Producto_ID { get; set; }
+    public Producto Producto { get; set; }   // Navigation property
+
+    public int Venta_ID { get; set; }
+    public Venta Venta { get; set; }         // Navigation property
+}
+```
+
+The `Producto` navigation property is eagerly loaded by the controller (see [URL and Access](#url-and-access) below), so `det.Producto.NombreProducto` is always available without a lazy-load round-trip.
+
+`Subtotal` is a stored, computed column. It is set equal to `Cantidad × PrecioUnitario` at the moment the detail record is created and is never updated afterward. This means the displayed subtotals reflect exactly what was charged at the time of the transaction.
+
+## Price Snapshot
+
+<Note>
+  `PrecioUnitario` in `DetalleVenta` stores the product's `PrecioVenta` **at the exact moment the sale was processed** — not the product's current price. If a product's price is updated in the catalog after a sale has been recorded, the historical `PrecioUnitario` on every past `DetalleVenta` remains unchanged. This ensures that sale totals, receipts, and audit records always reflect what the customer was actually charged.
+</Note>
+
+During new-sale creation, `PrecioUnitario` is set directly from the submitted `precios[]` array (which the POS screen populates from the product search API response):
+
+```csharp
+detalles.Add(new DetalleVenta
+{
+    Producto_ID = producto.ID_Producto,
+    Cantidad    = cant,
+    PrecioUnitario = precios[i],   // captured at time of sale
+    Subtotal    = cant * precios[i]
+});
+```
+
+## URL and Access
+
+```
+GET /Venta/Detalle/{id}
+```
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | `int` | The `ID_Venta` of the sale to display |
+
+**Access:** All authenticated users. No role restriction is applied — only `[Authorize]` at the controller level is required.
+
+The controller loads the sale with all necessary related data in a single query using `Include` and `ThenInclude`:
+
+```csharp
+Venta venta = await _context.Ventas
+    .Include(v => v.Cliente)
+    .Include(v => v.Detalles)
+        .ThenInclude(d => d.Producto)
+    .FirstAsync(v => v.ID_Venta == id);
+
+return View(venta);
+```
+
+This query joins three tables in one round-trip:
+
+- `Ventas` — the root sale record
+- `Clientes` — the linked client record (for name, document type/number, and phone)
+- `DetalleVentas` → `Productos` — every line item and its associated product name
+
+The view is strongly typed to `Final_proyecto.Models.Venta` and uses the fully populated model directly without any additional `ViewBag` data.

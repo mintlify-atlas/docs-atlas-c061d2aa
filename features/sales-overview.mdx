@@ -1,0 +1,122 @@
+---
+title: "Sales Management: History and Operations"
+sidebarTitle: "Sales Overview"
+description: "View the complete sales history, understand receipt types (Boleta and Factura), and manage existing sales with automatic stock restoration on deletion."
+---
+
+The Sales module in Tienda Mi Cholo S.A.C. is the central hub for every transaction processed at the point of sale. It provides a chronological record of every completed sale, displays client and receipt information at a glance, and enforces role-based permissions so that only authorized staff can create or delete transactions. All authenticated users — Administradores, Gerentes, Cajeros, and read-only staff — can browse the sales history, while more sensitive operations such as creating a new sale or annulling an existing one are restricted to specific roles.
+
+## Sales List
+
+The sales history is available at `/Venta/Lista` and is accessible to every authenticated user. Records are returned sorted by `FechaVenta` in descending order, so the most recent sale always appears at the top of the table. Each row eagerly loads its related `Cliente` record so client names are displayed without a second request.
+
+| Column | Source field | Notes |
+|---|---|---|
+| **ID** | `Venta.ID_Venta` | Auto-incremented primary key |
+| **Comprobante** | `Venta.TipoComprobante` | Color-coded badge: emerald for Boleta, blue for Factura |
+| **Nro. Comprobante** | `Venta.NumeroComprobante` | Auto-generated correlative, e.g. `B001-00000001` |
+| **Cliente** | `Venta.Cliente.Nombres` + `Apellidos` | Loaded via `Include(v => v.Cliente)` |
+| **Fecha** | `Venta.FechaVenta` | Formatted `dd/MM/yyyy HH:mm` |
+| **Total** | `Venta.MontoTotal` | Displayed as `S/ #,##0.00`; recalculated automatically |
+| **Acciones** | — | "Ver" (all roles) · "Anular" (Administrador, Gerente only) |
+
+The controller query that populates this view is:
+
+```csharp
+List<Venta> lista = await _context.Ventas
+    .Include(v => v.Cliente)
+    .OrderByDescending(v => v.FechaVenta)
+    .ToListAsync();
+```
+
+## Receipt Types
+
+Every sale is tied to exactly one of two receipt types. The type is chosen on the new-sale screen and determines which client fields are required, as well as the voucher-number prefix that is generated.
+
+<Tabs>
+  <Tab title="Boleta de Venta">
+    A Boleta de Venta is the standard consumer receipt. Client identification is entirely optional: if the cashier leaves the client name blank, the system automatically assigns the sale to the built-in **Público General** record (document `00000000`, `TipoDocumento = DNI`).
+
+    When a name is provided, the system first searches for an existing `Cliente` with `TipoDocumento = DNI` matching that name. If none is found, a new client record is created with an auto-generated 8-digit DNI.
+
+    **Voucher number format:** `B001-XXXXXXXX`
+
+    The eight trailing digits are a zero-padded correlative that increments independently from the Factura series. For example, the first boleta ever issued is numbered `B001-00000001`.
+
+    | Field | Required? | Notes |
+    |---|---|---|
+    | Nombre del Cliente | Optional | Leave blank for Público General |
+  </Tab>
+  <Tab title="Factura">
+    A Factura is issued to business clients and requires a valid RUC. All three client fields below are **mandatory** — the form will not submit, and the server will reject the request, if any field is missing or fails validation.
+
+    If a client with the same RUC already exists in the database, the system updates their Razón Social and phone number to reflect any changes before linking them to the sale.
+
+    **Voucher number format:** `F001-XXXXXXXX`
+
+    The eight-digit correlative increments independently from the Boleta series.
+
+    | Field | Required? | Validation rule |
+    |---|---|---|
+    | Razón Social | ✅ Yes | Non-empty string |
+    | RUC | ✅ Yes | Exactly 11 digits, must start with `10` or `20` |
+    | Celular | ✅ Yes | Exactly 9 digits, must start with `9`, cannot be all the same digit (e.g. `999999999`) |
+  </Tab>
+</Tabs>
+
+## Deleting a Sale
+
+<Warning>
+  Deleting (annulling) a sale is a permanent action. There is no soft-delete or recycle bin. Once confirmed, the sale record and all of its line items are removed from the database and **all associated product stock is fully restored**. This action cannot be undone.
+</Warning>
+
+Only users with the **Administrador** or **Gerente** role can see and use the "Anular" button in the sales list. The deletion endpoint is:
+
+```
+GET /Venta/Eliminar/{id}
+```
+
+When a sale is deleted, the controller iterates over every `DetalleVenta` line belonging to that sale and adds the stored `Cantidad` back to the corresponding product's `Stock`:
+
+```csharp
+foreach (var detalle in venta.Detalles)
+{
+    var producto = await _context.Productos
+        .FirstAsync(p => p.ID_Producto == detalle.Producto_ID);
+    producto.Stock += detalle.Cantidad;
+    _context.Productos.Update(producto);
+}
+
+_context.DetalleVentas.RemoveRange(venta.Detalles);
+_context.Ventas.Remove(venta);
+await _context.SaveChangesAsync();
+```
+
+After deletion the user is redirected back to the sales list and the voucher number that was in use is **not reused** — the correlative continues from where it left off for future sales.
+
+## Sale Totals
+
+The `MontoTotal` field on a `Venta` record is never entered manually. It is always computed as the arithmetic sum of all `DetalleVenta.Subtotal` values that belong to that sale:
+
+```
+MontoTotal = Σ (DetalleVenta.Subtotal)
+           = Σ (Cantidad × PrecioUnitario)
+```
+
+This recalculation happens automatically in two scenarios:
+
+1. **When a new sale is created** — the total is computed during the transaction before the `Venta` record is persisted.
+2. **When a line item is added or removed from an existing sale** — `DetalleVentaController` recalculates and saves the total immediately after every change.
+
+Because `MontoTotal` is always derived from the stored line items, it stays consistent even if a cashier modifies quantities or removes products from a sale that is still open.
+
+---
+
+<CardGroup cols={2}>
+  <Card title="Register a New Sale" icon="cart-plus" href="/features/new-sale">
+    Step-by-step walkthrough of the POS interface: search products, build a cart, choose a receipt type, and finalize the transaction.
+  </Card>
+  <Card title="Sale Detail View" icon="receipt" href="/features/sale-detail">
+    Understand what is displayed on the sale detail page, including line items, price snapshots, and client information.
+  </Card>
+</CardGroup>

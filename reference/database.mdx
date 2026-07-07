@@ -1,0 +1,153 @@
+---
+title: "Database Schema and Entity Framework Configuration"
+sidebarTitle: "Database"
+description: "SQL Server schema managed by EF Core 10 — seven tables, foreign key relationships, seed data, and the AppDbContext configuration."
+---
+
+Tienda Mi Cholo uses a **SQL Server** database named `TIENDA_MICHOLO`, managed entirely by **Entity Framework Core 10** (package version `10.0.9`). The schema is declared through `AppDbContext` in `Final_proyecto.Data` and versioned through three EF Core migrations. Seven entity tables cover system users, access roles, product categories, the product catalog, customer records, sale headers, and sale line items. Seed data baked into the initial migration ensures the application starts with the three standard roles, a default admin account, a public-general client placeholder, and six product categories.
+
+---
+
+## Tables
+
+| Table | DbSet | Primary Key | Description |
+|-------|-------|-------------|-------------|
+| `Usuarios` | `AppDbContext.Usuarios` | `ID_Usuario` | System user accounts with login credentials and role assignment |
+| `Roles` | `AppDbContext.Roles` | `ID_Rol` | Access roles used for authorization (`Administrador`, `Gerente`, `Cajero`) |
+| `Categorias` | `AppDbContext.Categorias` | `ID_Categoria` | Product category definitions used to organise the catalog |
+| `Productos` | `AppDbContext.Productos` | `ID_Producto` | Product catalog including pricing, stock, and active/inactive status |
+| `Clientes` | `AppDbContext.Clientes` | `ID_Cliente` | Customer records; ID 1 is the reserved **Público General** placeholder |
+| `Ventas` | `AppDbContext.Ventas` | `ID_Venta` | Sale headers: voucher type, number, date, total, and foreign keys to client and user |
+| `DetalleVentas` | `AppDbContext.DetalleVentas` | `ID_DetalleVenta` | Sale line items: quantity, unit price, subtotal, and foreign keys to sale and product |
+
+---
+
+## Foreign Key Relationships
+
+The following relationships are configured in `AppDbContext.OnModelCreating` using EF Core's fluent API:
+
+| Dependent | Foreign Key | Principal | Cardinality |
+|-----------|-------------|-----------|-------------|
+| `Usuario` | `Rol_ID` | `Roles.ID_Rol` | Many-to-one |
+| `Producto` | `Categoria_ID` | `Categorias.ID_Categoria` | Many-to-one |
+| `Venta` | `Cliente_ID` | `Clientes.ID_Cliente` | Many-to-one |
+| `DetalleVenta` | `Venta_ID` | `Ventas.ID_Venta` | Many-to-one |
+| `DetalleVenta` | `Producto_ID` | `Productos.ID_Producto` | Many-to-one |
+
+All foreign keys were created with `CASCADE` delete in the initial migration, meaning deleting a parent record will also delete its dependents (e.g., deleting a `Venta` cascades to its `DetalleVentas`).
+
+---
+
+## AppDbContext Configuration
+
+The `OnModelCreating` method configures every relationship with explicit `HasOne / WithMany / HasForeignKey` chains and then seeds the reference data:
+
+```csharp
+protected override void OnModelCreating(ModelBuilder modelBuilder)
+{
+    // Usuario → Rol
+    modelBuilder.Entity<Usuario>()
+        .HasOne(u => u.Rol)
+        .WithMany(r => r.Usuarios)
+        .HasForeignKey(u => u.Rol_ID);
+
+    // Producto → Categoria
+    modelBuilder.Entity<Producto>()
+        .HasOne(p => p.Categoria)
+        .WithMany(c => c.Productos)
+        .HasForeignKey(p => p.Categoria_ID);
+
+    // Venta → Cliente
+    modelBuilder.Entity<Venta>()
+        .HasOne(v => v.Cliente)
+        .WithMany(c => c.Ventas)
+        .HasForeignKey(v => v.Cliente_ID);
+
+    // DetalleVenta → Venta
+    modelBuilder.Entity<DetalleVenta>()
+        .HasOne(d => d.Venta)
+        .WithMany(v => v.Detalles)
+        .HasForeignKey(d => d.Venta_ID);
+
+    // DetalleVenta → Producto
+    modelBuilder.Entity<DetalleVenta>()
+        .HasOne(d => d.Producto)
+        .WithMany(p => p.Detalles)
+        .HasForeignKey(d => d.Producto_ID);
+
+    base.OnModelCreating(modelBuilder);
+}
+```
+
+The full `DbSet` declarations in `AppDbContext`:
+
+```csharp
+public DbSet<Usuario>     Usuarios     { get; set; }
+public DbSet<Rol>         Roles        { get; set; }
+public DbSet<Categoria>   Categorias   { get; set; }
+public DbSet<Producto>    Productos    { get; set; }
+public DbSet<Cliente>     Clientes     { get; set; }
+public DbSet<Venta>       Ventas       { get; set; }
+public DbSet<DetalleVenta> DetalleVentas { get; set; }
+```
+
+---
+
+## Connecting to the Database
+
+The connection string is stored in `appsettings.json` under the key `CadenaSQL`:
+
+```json
+{
+  "ConnectionStrings": {
+    "CadenaSQL": "Data Source=(localdb)\\MSSQLLocalDB;Initial Catalog=TIENDA_MICHOLO;Trusted_Connection=True;TrustServerCertificate=True;"
+  }
+}
+```
+
+`Program.cs` reads this key and registers `AppDbContext` with the DI container:
+
+```csharp
+builder.Services.AddDbContext<AppDbContext>(options =>
+{
+    options.UseSqlServer(builder.Configuration.GetConnectionString("CadenaSQL"));
+});
+```
+
+<Note>
+  The default configuration targets `(localdb)\MSSQLLocalDB`, which ships with Visual Studio. To deploy to a named SQL Server instance, update the `Data Source` and replace `Trusted_Connection=True` with `User Id` / `Password` credentials, or switch to a managed-identity connection string.
+</Note>
+
+---
+
+## Managing the Database
+
+Use the EF Core CLI tools to manage schema changes. All commands should be run from the project directory (where the `.csproj` file lives).
+
+**Apply all pending migrations to create or update the database:**
+
+```bash
+dotnet ef database update
+```
+
+**Create a new migration after modifying a model or `AppDbContext`:**
+
+```bash
+dotnet ef migrations add <MigrationName>
+```
+
+**Roll back to a specific previous migration:**
+
+```bash
+dotnet ef database update <PreviousMigrationName>
+```
+
+For example, to roll back to just before the `AddEstadoToProducto` migration was applied:
+
+```bash
+dotnet ef database update Inicial
+```
+
+<Warning>
+  Rolling back to or past the `Inicial` migration (i.e., running `dotnet ef database update 0`) drops **all tables and all data** from `TIENDA_MICHOLO`. The seed data will be re-applied on the next `dotnet ef database update`, but any transactional data entered by users will be permanently lost.
+</Warning>

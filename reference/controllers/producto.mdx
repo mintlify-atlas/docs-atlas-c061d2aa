@@ -1,0 +1,142 @@
+---
+title: "ProductoController Reference"
+sidebarTitle: "ProductoController"
+description: "Routes for product listing with search and pagination, creating, editing, deleting, and toggling active/inactive status — with role-based access."
+---
+
+`ProductoController` manages the product catalog for Tienda Mi Cholo. It provides a paginated, searchable product list accessible to all authenticated users, along with create, edit, delete, and status-toggle operations restricted to the `Administrador` and `Gerente` roles. The controller carries `[ResponseCache(Location = ResponseCacheLocation.None, NoStore = true)]` and a class-level `[Authorize]` attribute, so every action requires a valid login session. Products maintain a boolean `Estado` flag that controls visibility in the sale form's product search — only products with `Estado = true` and `Stock > 0` appear in `GET /Venta/BuscarProductos`.
+
+---
+
+## Actions
+
+### GET /Producto/Lista
+
+Returns a paginated, optionally filtered list of all products, each with its `Categoria` eagerly loaded, ordered by `ID_Producto` ascending.
+
+**Authorization:** Any authenticated user (all roles).
+
+<ParamField query="buscar" type="string">
+  Optional search string. When provided, filters products whose `NombreProducto` or `Descripcion` contains the value (case-insensitive SQL `LIKE`). Whitespace-only values are ignored.
+</ParamField>
+
+<ParamField query="pagina" type="int">
+  Page number to display. Defaults to `1`. If the requested page exceeds the total number of pages, the controller clamps it to the last valid page.
+</ParamField>
+
+<Note>
+  Page size is fixed at **15 records per page**. The controller computes the offset with `Skip((pagina - 1) * 15).Take(15)`. Pagination metadata (`PaginaActual`, `TotalPaginas`, `TotalRegistros`, `PageSize`) is passed to the view via `ViewBag`.
+</Note>
+
+**Example paginated search URL:**
+
+```
+/Producto/Lista?buscar=leche&pagina=2
+```
+
+The view receives the filtered `List<Producto>` and can build pager links using `ViewBag.TotalPaginas` and the current `buscar` value preserved in `ViewBag.Buscar`.
+
+---
+
+### GET /Producto/Nuevo
+
+Displays the new-product creation form. Populates `ViewBag.Categorias` with all categories from the database so the form can render a category dropdown.
+
+**Authorization:** `Administrador`, `Gerente`.
+
+---
+
+### POST /Producto/Nuevo
+
+Validates and persists a new product. Enforces that the sale price is not lower than the purchase price before accepting the model. Sets `Estado = true` on all newly created products regardless of what the form submits.
+
+**Authorization:** `Administrador`, `Gerente`.
+
+<ParamField body="producto" type="Producto" required>
+  Model-bound `Producto` object. Key fields:
+
+  - `NombreProducto` — product name (`nvarchar(100)`).
+  - `Descripcion` — product description (`nvarchar(200)`, nullable after migration 3).
+  - `PrecioCompra` — purchase cost (`decimal(10,2)`).
+  - `PrecioVenta` — selling price (`decimal(10,2)`). Must be **≥ `PrecioCompra`**.
+  - `Stock` — initial stock quantity (`int`).
+  - `Categoria_ID` — foreign key to `Categorias`.
+</ParamField>
+
+<Warning>
+  If `PrecioVenta < PrecioCompra`, a model error is added and the form is returned with the categories list repopulated. The record is **not** saved.
+</Warning>
+
+**On success:** Redirects to `GET /Producto/Lista`.
+
+---
+
+### GET /Producto/Editar/{id}
+
+Loads an existing product into the edit form. Fetches the product by `ID_Producto` and populates `ViewBag.Categorias` for the category dropdown.
+
+**Authorization:** `Administrador`, `Gerente`.
+
+<ParamField path="id" type="int" required>
+  Primary key (`ID_Producto`) of the product to edit.
+</ParamField>
+
+---
+
+### POST /Producto/Editar
+
+Validates and saves changes to an existing product. Applies the same `PrecioVenta ≥ PrecioCompra` rule as the create action.
+
+**Authorization:** `Administrador`, `Gerente`.
+
+<ParamField body="producto" type="Producto" required>
+  Full model-bound `Producto` object including the existing `ID_Producto`. All fields are updated via `_context.Productos.Update(producto)`.
+</ParamField>
+
+<Warning>
+  If `PrecioVenta < PrecioCompra`, a model error is added and the form is returned with categories repopulated. Changes are **not** saved.
+</Warning>
+
+**On success:** Redirects to `GET /Producto/Lista`.
+
+---
+
+### GET /Producto/Eliminar/{id}
+
+Permanently removes a product from the database (hard delete) and redirects to the product list.
+
+**Authorization:** `Administrador`, `Gerente`.
+
+<ParamField path="id" type="int" required>
+  Primary key (`ID_Producto`) of the product to delete.
+</ParamField>
+
+<Warning>
+  This is a **hard delete** with no confirmation step. Because `DetalleVentas` has a `CASCADE` delete relationship through `Productos`, deleting a product will also cascade to any associated sale line items. Prefer using `POST /Producto/CambiarEstado/{id}` to deactivate a product instead of deleting it when historical sales data must be preserved.
+</Warning>
+
+**On success:** Redirects to `GET /Producto/Lista`.
+
+---
+
+### POST /Producto/CambiarEstado/{id}
+
+Toggles the `Estado` boolean on a product — active products (`Estado = true`) become inactive, and inactive products become active. This is the recommended way to hide a product from the sale form without deleting it.
+
+**Authorization:** `Administrador`, `Gerente`.
+
+<ParamField path="id" type="int" required>
+  Primary key (`ID_Producto`) of the product whose status should be toggled.
+</ParamField>
+
+```csharp
+producto.Estado = !producto.Estado;
+_context.Productos.Update(producto);
+await _context.SaveChangesAsync();
+```
+
+<Tip>
+  Products with `Estado = false` are excluded from `GET /Venta/BuscarProductos` results, so cashiers will not be able to add them to a new sale. The product continues to appear in the admin product list so it can be reactivated at any time.
+</Tip>
+
+**On success:** Redirects to `GET /Producto/Lista`.

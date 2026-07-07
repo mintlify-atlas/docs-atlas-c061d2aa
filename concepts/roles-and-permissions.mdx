@@ -1,0 +1,171 @@
+---
+title: "Roles and Permissions in Tienda Mi Cholo"
+sidebarTitle: "Roles & Permissions"
+description: "Three built-in roles control access to every feature — Administrador, Gerente, and Cajero. Learn what each role can do."
+---
+
+Tienda Mi Cholo uses ASP.NET Core's cookie-based authentication and the built-in `[Authorize]` attribute system to enforce role-based access control (RBAC) across the entire application. Roles are stored as rows in the `Roles` table and linked to each user via a `Rol_ID` foreign key on the `Usuarios` table. When a user logs in, their role name is embedded directly into the authentication cookie as a `ClaimTypes.Role` claim, which ASP.NET Core then evaluates automatically on every request against any `[Authorize(Roles = "...")]` attribute present on a controller or action.
+
+## The Three Roles
+
+Three roles are seeded into the database during initial migration and serve as the foundation for all permission decisions in the system.
+
+<CardGroup cols={3}>
+  <Card title="Administrador" icon="crown">
+    Full access to every feature in the system, including user management, role management, and all destructive operations. The seeded admin account (`admin@micholo.com`) is assigned this role by default.
+  </Card>
+  <Card title="Gerente" icon="briefcase">
+    Broad operational access — can manage products, categories, and clients, and can delete sales to correct errors. Cannot access user or role administration.
+  </Card>
+  <Card title="Cajero" icon="cash-register">
+    Day-to-day point-of-sale access. Can browse inventory, register new clients, and create sales. Cannot modify products, categories, or delete any records.
+  </Card>
+</CardGroup>
+
+<Note>
+  Role management (creating, editing, and deleting roles) is restricted exclusively to the **Administrador** role. The `RolController` is decorated with `[Authorize(Roles = "Administrador")]` at the class level, so no other role can access any of its actions.
+</Note>
+
+## Permission Matrix
+
+The table below is derived directly from the `[Authorize(Roles = "...")]` attributes on each controller and action. A controller-level `[Authorize]` (without a role restriction) means all three roles have access; a controller-level `[Authorize(Roles = "Administrador")]` means only Administrador can access any action within it.
+
+| Feature | Administrador | Gerente | Cajero |
+|---|:---:|:---:|:---:|
+| Dashboard (`Home/Index`) | ✓ | ✓ | ✓ |
+| View Sales list (`Venta/Lista`) | ✓ | ✓ | ✓ |
+| Create New Sale (`Venta/Nueva`) | ✓ | ✓ | ✓ |
+| Delete Sale (`Venta/Eliminar`) | ✓ | ✓ | ✗ |
+| View Products (`Producto/Lista`) | ✓ | ✓ | ✓ |
+| Create Product (`Producto/Nuevo`) | ✓ | ✓ | ✗ |
+| Edit Product (`Producto/Editar`) | ✓ | ✓ | ✗ |
+| Delete Product (`Producto/Eliminar`) | ✓ | ✓ | ✗ |
+| Toggle Product Status (`Producto/CambiarEstado`) | ✓ | ✓ | ✗ |
+| View Categories (`Categoria/Lista`) | ✓ | ✓ | ✓ |
+| Create Category (`Categoria/Nuevo`) | ✓ | ✓ | ✗ |
+| Edit Category (`Categoria/Editar`) | ✓ | ✓ | ✗ |
+| Delete Category (`Categoria/Eliminar`) | ✓ | ✓ | ✗ |
+| View Clients (`Cliente/Lista`) | ✓ | ✓ | ✓ |
+| Create Client (`Cliente/Nuevo`) | ✓ | ✓ | ✓ |
+| Edit Client (`Cliente/Editar`) | ✓ | ✓ | ✗ |
+| Delete Client (`Cliente/Eliminar`) | ✓ | ✓ | ✗ |
+| Manage Users (`Usuario/*`) | ✓ | ✗ | ✗ |
+| Manage Roles (`Rol/*`) | ✓ | ✗ | ✗ |
+
+## How Authorization Works
+
+Authorization is applied at two levels: the **controller level** (applies to every action in the class) and the **action level** (overrides or supplements the controller-level attribute for a specific endpoint).
+
+The example below is taken directly from `VentaController.cs` and shows both patterns in the same controller:
+
+```csharp
+// Controller-level: all authenticated users can access any action
+// unless a more-specific attribute on the action says otherwise.
+[Authorize]
+[ResponseCache(Location = ResponseCacheLocation.None, NoStore = true)]
+public class VentaController : Controller
+{
+    // ✓  All roles — inherits the controller-level [Authorize]
+    [HttpGet]
+    public async Task<IActionResult> Lista()
+    {
+        List<Venta> lista = await _context.Ventas
+            .Include(v => v.Cliente)
+            .OrderByDescending(v => v.FechaVenta)
+            .ToListAsync();
+        return View(lista);
+    }
+
+    // ✓  All three roles explicitly named
+    [Authorize(Roles = "Administrador,Gerente,Cajero")]
+    [HttpGet]
+    public async Task<IActionResult> Nueva()
+    {
+        ViewBag.Clientes = await _context.Clientes
+            .Where(c => c.ID_Cliente != 1)
+            .ToListAsync();
+        return View();
+    }
+
+    // ✗  Cajero is excluded — only Administrador or Gerente can delete
+    [Authorize(Roles = "Administrador,Gerente")]
+    [HttpGet]
+    public async Task<IActionResult> Eliminar(int id)
+    {
+        Venta venta = await _context.Ventas
+            .Include(v => v.Detalles)
+            .FirstAsync(v => v.ID_Venta == id);
+
+        // Restore product stock before removing the sale
+        foreach (var detalle in venta.Detalles)
+        {
+            var producto = await _context.Productos
+                .FirstAsync(p => p.ID_Producto == detalle.Producto_ID);
+            producto.Stock += detalle.Cantidad;
+            _context.Productos.Update(producto);
+        }
+
+        _context.DetalleVentas.RemoveRange(venta.Detalles);
+        _context.Ventas.Remove(venta);
+        await _context.SaveChangesAsync();
+        return RedirectToAction(nameof(Lista));
+    }
+}
+```
+
+When a user without the required role attempts to access a restricted action, ASP.NET Core redirects them to the `AccesoDenegado` view served by `AccesoController`.
+
+```csharp
+[HttpGet]
+public IActionResult AccesoDenegado()
+{
+    return View();
+}
+```
+
+## Claims at Login
+
+When a user successfully authenticates, `AccesoController.Login` builds a `ClaimsIdentity` with five claims that are persisted in an encrypted cookie for the lifetime of the session. These claims are then available throughout the application via `HttpContext.User` and `HttpContext.Session`.
+
+```csharp
+var claims = new List<Claim>()
+{
+    new Claim(ClaimTypes.Name,  usuario.NomUsuario),
+    new Claim(ClaimTypes.Email, usuario.CorreoUsuario),
+    new Claim(ClaimTypes.Role,  usuario.Rol.NomRol),
+    new Claim("IdUsuario",      usuario.ID_Usuario.ToString()),
+    new Claim("NomCompleto",    usuario.NomCompleto)
+};
+
+var claimsIdentity = new ClaimsIdentity(
+    claims,
+    CookieAuthenticationDefaults.AuthenticationScheme);
+
+var properties = new AuthenticationProperties()
+{
+    AllowRefresh = true,
+    IsPersistent = true
+};
+
+await HttpContext.SignInAsync(
+    CookieAuthenticationDefaults.AuthenticationScheme,
+    new ClaimsPrincipal(claimsIdentity),
+    properties);
+```
+
+| Claim | Type | Source field | Purpose |
+|---|---|---|---|
+| `ClaimTypes.Name` | Standard | `Usuario.NomUsuario` | Displayed as the logged-in username; used by `User.Identity.Name` |
+| `ClaimTypes.Email` | Standard | `Usuario.CorreoUsuario` | Identifies the user's email address within the claims principal |
+| `ClaimTypes.Role` | Standard | `Rol.NomRol` | Evaluated by every `[Authorize(Roles = "...")]` attribute in the application |
+| `"IdUsuario"` | Custom | `Usuario.ID_Usuario` | Stored in session and used when recording `Usuario_ID` on new `Venta` records |
+| `"NomCompleto"` | Custom | `Usuario.NomCompleto` | Displayed in the navigation bar as the user's full display name |
+
+In addition to the cookie claims, four session keys are set at login for server-side access:
+
+```csharp
+HttpContext.Session.SetString("Usuario",     usuario.NomUsuario);
+HttpContext.Session.SetString("NomCompleto", usuario.NomCompleto);
+HttpContext.Session.SetString("Rol",         usuario.Rol.NomRol);
+HttpContext.Session.SetInt32("IdUsuario",    usuario.ID_Usuario);
+```

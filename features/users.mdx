@@ -1,0 +1,155 @@
+---
+title: "User Management: Accounts and Role Assignment"
+sidebarTitle: "Users"
+description: "Create and manage system user accounts — set names, email, password, active status, and role assignment. Administrator access only."
+---
+
+User management in Tienda Mi Cholo S.A.C. is reserved exclusively for the **Administrador** role. The entire `UsuarioController` is decorated with `[Authorize(Roles = "Administrador")]` at the class level, meaning no other role — not even Gerente — can access the user list, creation form, edit form, or deletion endpoint. This design ensures that only the system administrator can grant, modify, or revoke access to the application. User accounts are linked to exactly one role, and the `Estado` flag allows accounts to be suspended without deletion.
+
+---
+
+## User Fields
+
+### Create (UsuarioVM)
+
+When creating a new user, the controller binds the form to `UsuarioVM` — a dedicated view model that includes the password confirmation field not present on the database entity.
+
+<ParamField path="NomCompleto" type="string" required>
+  Full display name of the user (e.g., `"María Torres Quispe"`). Maximum 50 characters. Shown in the sidebar navigation and printed on reports.
+</ParamField>
+
+<ParamField path="NomUsuario" type="string" required>
+  Login display name / username (e.g., `"mtorres"`). Maximum 50 characters. Stored as a claim after successful authentication and rendered throughout the UI as the active session identity.
+</ParamField>
+
+<ParamField path="CorreoUsuario" type="string" required>
+  Email address used as the **login credential** on the sign-in form. Maximum 50 characters. Must be unique in practice — the controller does not enforce a uniqueness check, so duplicate email addresses should be prevented by convention or a database constraint.
+</ParamField>
+
+<ParamField path="Contraseña" type="string" required>
+  Account password. Maximum 100 characters. **Stored as plain text** — see [Security Considerations](#security-considerations).
+</ParamField>
+
+<ParamField path="RepiteContraseña" type="string" required>
+  Password confirmation field. Present **only during creation** (part of `UsuarioVM`, not the `Usuario` model). The controller compares `Contraseña == RepiteContraseña` before saving; mismatches return the form with the message `"Las contraseñas no coinciden"`.
+</ParamField>
+
+<ParamField path="Estado" type="bool" required>
+  Account active status. `true` = Active (shown as a green badge in the list), `false` = Inactive (shown as a red badge). Inactive users are blocked at login with the message `"Su cuenta está desactivada"` and cannot access any part of the application.
+</ParamField>
+
+<ParamField path="Rol_ID" type="int" required>
+  Foreign key referencing the `Rol` table. Selected from a dropdown populated via `ViewBag.Roles`. Determines which areas of the system the user can access. See [Roles](/features/roles) for available values.
+</ParamField>
+
+### Edit (Usuario model)
+
+The edit form binds directly to the `Usuario` entity. It contains the same fields as above **except `RepiteContraseña`**, which is not part of the model. When updating a user, the password field is written back as-is — there is no re-confirmation step on edit.
+
+---
+
+## Creating a User
+
+<Steps>
+  <Step title="Navigate to User Management">
+    Log in as **Administrador** and select **Usuarios** from the sidebar. The list view (`/Usuario/Lista`) shows all existing accounts with their name, username, email, role, and status.
+  </Step>
+  <Step title="Open the New User Form">
+    Click **Nuevo Usuario**. The `GET /Usuario/Nuevo` action loads `ViewBag.Roles` from the database and renders the shared `Editar.cshtml` view with an empty `UsuarioVM` binding.
+  </Step>
+  <Step title="Fill in the Form">
+    Complete all required fields. Select the appropriate role from the dropdown. Set `Estado` to **Active** to allow immediate login.
+  </Step>
+  <Step title="Confirm the Password">
+    Enter the password in both `Contraseña` and `RepiteContraseña`. If they do not match, the form reloads with the error message and no record is created.
+  </Step>
+  <Step title="Save">
+    Submit the form. On success the controller calls `_context.Usuarios.AddAsync(usuario)` and redirects to the user list. If `ID_Usuario` remains `0` after the save (indicating an EF Core failure), the form is shown again with `"El usuario no se pudo crear"`.
+  </Step>
+</Steps>
+
+<Note>
+  The `Nuevo` GET action renders the `Editar.cshtml` view — **not** a dedicated `Nuevo.cshtml`. The `return View(nameof(Editar))` call is intentional; a single view template handles both creation and editing.
+</Note>
+
+---
+
+## Activating and Deactivating Users
+
+The `Estado` boolean controls whether a user can log in. An administrator can toggle this field at any time via the edit form without deleting the account.
+
+| `Estado` value | Badge in list | Login result |
+|----------------|---------------|--------------|
+| `true` | Active (green) | Allowed — session is created normally |
+| `false` | Inactive (red) | Blocked — user sees `"Su cuenta está desactivada"` |
+
+<Tip>
+  Deactivating a user instead of deleting them preserves their association with historical sales records, ensuring that reports and audit trails remain accurate. Use deactivation for staff departures; reserve deletion for test or duplicate accounts.
+</Tip>
+
+---
+
+## Security Considerations
+
+<Warning>
+  **Passwords are stored as plain text** in this implementation. The `Contraseña` field on the `Usuario` model is a `string` written directly to the database with no hashing:
+
+  ```csharp
+  // UsuarioController.cs — Nuevo (POST)
+  Usuario usuario = new Usuario()
+  {
+      NomUsuario    = usuarioVM.NomUsuario,
+      NomCompleto   = usuarioVM.NomCompleto,
+      CorreoUsuario = usuarioVM.CorreoUsuario,
+      Contraseña    = usuarioVM.Contraseña,   // ← plain text
+      Estado        = usuarioVM.Estado,
+      Rol_ID        = usuarioVM.Rol_ID
+  };
+  ```
+
+  Before deploying to any production or internet-accessible environment:
+
+  1. **Hash passwords** using a strong adaptive algorithm. The recommended approach for .NET is `BCrypt.Net-Next` or the built-in `PasswordHasher<T>` from ASP.NET Core Identity.
+  2. **Change the seeded administrator password** immediately after first login — the default credentials created by the seeder are known to anyone with access to the source code.
+  3. Consider migrating to **ASP.NET Core Identity** for a full-featured, security-audited authentication layer.
+</Warning>
+
+---
+
+## Access Control
+
+<Note>
+  The entire `UsuarioController` is protected by `[Authorize(Roles = "Administrador")]` at the class level. There are no per-action overrides — every endpoint in the controller (list, create, edit, delete) requires the Administrador role. Users with Gerente or Cajero roles receive a `403 Forbidden` response if they attempt to navigate to any `/Usuario/*` URL directly.
+</Note>
+
+```csharp
+[Authorize(Roles = "Administrador")]
+[ResponseCache(Location = ResponseCacheLocation.None, NoStore = true)]
+public class UsuarioController : Controller
+{
+    // Lista, Nuevo, Editar, Eliminar — all require Administrador
+}
+```
+
+---
+
+## UsuarioVM Source
+
+The `UsuarioVM` view model is used exclusively for the user creation form. It decouples the `RepiteContraseña` confirmation field from the database entity and provides a clean boundary for create-only validation logic.
+
+```csharp
+// ViewModels/UsuarioVM.cs
+namespace Final_proyecto.ViewModels
+{
+    public class UsuarioVM
+    {
+        public string NomCompleto      { get; set; }
+        public string NomUsuario       { get; set; }
+        public string CorreoUsuario    { get; set; }
+        public string Contraseña       { get; set; }
+        public string RepiteContraseña { get; set; }
+        public bool   Estado           { get; set; }
+        public int    Rol_ID           { get; set; }
+    }
+}
+```
