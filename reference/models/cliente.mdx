@@ -1,5 +1,5 @@
 ---
-title: "Cliente Model Reference"
+title: "Cliente — Customer and Document Validation Model Reference"
 sidebarTitle: "Cliente"
 description: "Field reference for the Cliente entity — document type validation, contact details, and the default Público General client used for anonymous sales."
 ---
@@ -82,15 +82,15 @@ namespace Final_proyecto.Models
   Peruvian mobile phone number. Annotated with `[Required, StringLength(9)]` and validated by a `[RegularExpression]` — see [Document Type Validation](#document-type-validation) below. Exactly **9 characters** in the stored form (no country code, no spaces).
 </ResponseField>
 
-<ResponseField name="Correo" type="string?" required>
+<ResponseField name="Correo" type="string?">
   Optional email address. Annotated with `[StringLength(100)]` — maximum **100 characters**. May be `null`. Not used as a login credential (that role belongs to `Usuario.CorreoUsuario`).
 </ResponseField>
 
-<ResponseField name="Direccion" type="string?" required>
+<ResponseField name="Direccion" type="string?">
   Optional physical address. Annotated with `[StringLength(200)]` — maximum **200 characters**. May be `null`. Printed on *Factura* receipts when present.
 </ResponseField>
 
-<ResponseField name="Ventas" type="ICollection&lt;Venta&gt;?" required>
+<ResponseField name="Ventas" type="ICollection&lt;Venta&gt;?">
   Inverse navigation collection of all `Venta` records associated with this client. Nullable — not loaded unless `.Include(c => c.Ventas)` is used. Useful for producing a customer purchase history report.
 </ResponseField>
 
@@ -152,7 +152,7 @@ When a cashier processes a *Boleta* without collecting customer details, `VentaC
 
 ## Relationships
 
-<ResponseField name="Ventas" type="ICollection&lt;Venta&gt;?" required>
+<ResponseField name="Ventas" type="ICollection&lt;Venta&gt;?">
   One-to-many relationship configured in `AppDbContext.OnModelCreating`:
   ```csharp
   modelBuilder.Entity<Venta>()

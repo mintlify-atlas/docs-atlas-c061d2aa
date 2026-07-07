@@ -1,5 +1,5 @@
 ---
-title: "Role Management: Define Access Levels"
+title: "Role Management: Define and Configure Access Levels"
 sidebarTitle: "Roles"
 description: "The three built-in roles — Administrador, Gerente, and Cajero — cover all standard retail workflows. Create custom roles for specialized access needs."
 ---
@@ -12,13 +12,13 @@ Roles are the authorization mechanism that governs what each user can see and do
 
 <CardGroup cols={3}>
   <Card title="Administrador" icon="shield-halved">
-    Full access to every module in the system. Can manage users, roles, clients, products, categories, suppliers, and sales. The only role that can access `UsuarioController` and `RolController`. Seeded with `ID_Rol = 1`.
+    Full access to every module in the system. Can manage users, roles, clients, products, categories, and sales. The only role that can access `UsuarioController` and `RolController`. Seeded with `ID_Rol = 1`.
   </Card>
   <Card title="Gerente" icon="chart-line">
-    Operations and inventory management. Can register and edit clients, manage products, categories, and suppliers, and view all sales reports. Cannot access user or role management screens. Seeded with `ID_Rol = 2`.
+    Operations and inventory management. Can register and edit clients, manage products and categories, and view all sales reports. Cannot access user or role management screens. Seeded with `ID_Rol = 2`.
   </Card>
   <Card title="Cajero" icon="cash-register">
-    Front-of-counter access. Can process sales (Boleta and Factura), register new clients, and view the client and product lists. Has read-only access to inventory and cannot edit or delete clients, products, or suppliers. Seeded with `ID_Rol = 3`.
+    Front-of-counter access. Can process sales (Boleta and Factura), register new clients, and view the client and product lists. Has read-only access to inventory and cannot edit or delete clients or products. Seeded with `ID_Rol = 3`.
   </Card>
 </CardGroup>
 

@@ -1,7 +1,7 @@
 ---
-title: "Roles and Permissions in Tienda Mi Cholo"
+title: "Role-Based Access Control in Tienda Mi Cholo S.A.C"
 sidebarTitle: "Roles & Permissions"
-description: "Three built-in roles control access to every feature — Administrador, Gerente, and Cajero. Learn what each role can do."
+description: "Administrador, Gerente, and Cajero are the three built-in roles. Each enforces a distinct set of permissions via ASP.NET Core cookie-based RBAC."
 ---
 
 Tienda Mi Cholo uses ASP.NET Core's cookie-based authentication and the built-in `[Authorize]` attribute system to enforce role-based access control (RBAC) across the entire application. Roles are stored as rows in the `Roles` table and linked to each user via a `Rol_ID` foreign key on the `Usuarios` table. When a user logs in, their role name is embedded directly into the authentication cookie as a `ClaimTypes.Role` claim, which ASP.NET Core then evaluates automatically on every request against any `[Authorize(Roles = "...")]` attribute present on a controller or action.

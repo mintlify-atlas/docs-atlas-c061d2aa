@@ -1,5 +1,5 @@
 ---
-title: "Producto Model Reference"
+title: "Producto — Inventory and Pricing Model Field Reference"
 sidebarTitle: "Producto"
 description: "Full field reference for the Producto entity — pricing, stock tracking, category association, active status, and sale line item relationships."
 ---
@@ -46,7 +46,7 @@ namespace Final_proyecto.Models
   Human-readable product name displayed in the POS search results and inventory lists. Annotated with `[Required, StringLength(100)]` — must be non-null and no longer than **100 characters**.
 </ResponseField>
 
-<ResponseField name="Descripcion" type="string?" required>
+<ResponseField name="Descripcion" type="string?">
   Optional free-text description of the product. Annotated with `[StringLength(200)]` — maximum **200 characters**. May be `null`.
 </ResponseField>
 
@@ -62,7 +62,7 @@ namespace Final_proyecto.Models
   Current number of units available for sale. Decremented automatically when a `DetalleVenta` is committed. Only products where `Stock > 0` **and** `Estado = true` are returned by the `BuscarProductos` POS endpoint.
 </ResponseField>
 
-<ResponseField name="Estado" type="bool" required>
+<ResponseField name="Estado" type="bool">
   Soft-delete / active flag. Defaults to `true` (active) on creation. Setting `Estado = false` hides the product from all POS searches and prevents it from being added to new sales, without physically deleting the database row or invalidating historical `DetalleVenta` records.
 </ResponseField>
 
@@ -76,11 +76,11 @@ namespace Final_proyecto.Models
   ```
 </ResponseField>
 
-<ResponseField name="Categoria" type="Categoria?" required>
+<ResponseField name="Categoria" type="Categoria?">
   Navigation property to the parent `Categoria`. Nullable — may be `null` if the related entity is not loaded (i.e., query did not use `.Include(p => p.Categoria)`).
 </ResponseField>
 
-<ResponseField name="Detalles" type="ICollection&lt;DetalleVenta&gt;?" required>
+<ResponseField name="Detalles" type="ICollection&lt;DetalleVenta&gt;?">
   Inverse navigation collection of all `DetalleVenta` line items that reference this product. Nullable collection — will be `null` unless explicitly loaded with `.Include(p => p.Detalles)`. Useful for sales history reporting per product.
 </ResponseField>
 

@@ -45,7 +45,7 @@ Six stat cards are rendered across the top of the page. Each one is populated by
 
 ### Controller code
 
-The following method in `HomeController` runs all six database queries concurrently and also fetches the two detail lists used by the lower section of the page.
+The following method in `HomeController` runs all six database queries sequentially and also fetches the two detail lists used by the lower section of the page.
 
 ```csharp
 [Authorize]

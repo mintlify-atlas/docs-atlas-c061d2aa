@@ -1,5 +1,5 @@
 ---
-title: "Venta and DetalleVenta Model Reference"
+title: "Venta and DetalleVenta — Sale Transaction Model Reference"
 sidebarTitle: "Venta"
 description: "Field reference for the Venta (sale header) and DetalleVenta (line item) entities, including receipt types, client association, and automatic totalling."
 ---
@@ -27,7 +27,7 @@ A completed sale in Tienda Mi Cholo is modelled as a two-level structure: a sing
   - **Boleta:** `B001-XXXXXXXX` (e.g., `B001-00000042`)
   - **Factura:** `F001-XXXXXXXX` (e.g., `F001-00000007`)
 
-  The numeric suffix is zero-padded to eight digits and is derived from the total count of existing vouchers of that type plus one.
+  The numeric suffix is zero-padded to eight digits and is derived by finding the most-recent existing comprobante of the same type (ordered descending by `NumeroComprobante`), parsing its numeric suffix, and incrementing by one.
 </ResponseField>
 
 <ResponseField name="FechaVenta" type="DateTime" required>
@@ -54,7 +54,7 @@ A completed sale in Tienda Mi Cholo is modelled as a two-level structure: a sing
 </ResponseField>
 
 <ResponseField name="Usuario_ID" type="int" required>
-  The `ID_Usuario` of the logged-in cashier or administrator who processed the sale. Populated from the authenticated user's claims at the time of sale creation. Not a formal EF Core navigation property — stored as a plain integer foreign key.
+  The `ID_Usuario` of the logged-in cashier or administrator who processed the sale. Populated from `HttpContext.Session.GetInt32("IdUsuario")` at the time of sale creation; falls back to `1` if the session value is absent. Not a formal EF Core navigation property — stored as a plain integer foreign key with no corresponding navigation object on the `Venta` class.
 </ResponseField>
 
 <ResponseField name="Detalles" type="ICollection&lt;DetalleVenta&gt;" required>

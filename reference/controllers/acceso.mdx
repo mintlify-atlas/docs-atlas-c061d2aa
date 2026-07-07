@@ -7,7 +7,7 @@ description: "Authentication routes — login with email and password, session s
 `AccesoController` is the authentication gateway for Tienda Mi Cholo. It handles displaying and processing the login form, setting up the ASP.NET Core cookie authentication principal and the server-side session, signing out, and rendering the access-denied page for users who attempt to reach a route their role does not permit. Unlike every other controller in the application, `AccesoController` does **not** carry a class-level `[Authorize]` attribute — the login and access-denied actions must be reachable by unauthenticated visitors. The default route configured in `Program.cs` points to `Acceso/Login`, so the login page is the application entry point.
 
 <Note>
-  All actions in this controller carry `[ResponseCache(Location = ResponseCacheLocation.None, NoStore = true)]`, which instructs the browser never to cache the response. This prevents a logged-out user from navigating back to a cached version of the login page.
+  `AccesoController` carries `[ResponseCache(Location = ResponseCacheLocation.None, NoStore = true)]` at the **class level**, so every action in the controller inherits the no-cache directive. This instructs the browser never to cache any response from this controller, which prevents a logged-out user from navigating back to a cached version of the login page.
 </Note>
 
 ---
@@ -95,11 +95,15 @@ The principal is signed in with `CookieAuthenticationDefaults.AuthenticationSche
 
 ---
 
-### GET /Acceso/Logout
+### /Acceso/Logout
 
 Clears all session data, signs out the cookie authentication scheme, and redirects the user back to the login page.
 
-**Authorization:** Authenticated users (implicitly — the middleware will redirect unauthenticated requests before reaching this action, though no explicit `[Authorize]` is present).
+<Note>
+  The `Logout` action has **no `[HttpGet]` or `[HttpPost]` attribute** in the source code, so ASP.NET Core's routing accepts any HTTP method for this path. It is conventionally called via a link (GET), but the action itself does not restrict the HTTP verb.
+</Note>
+
+**Authorization:** No explicit `[Authorize]` attribute — the action is reachable without authentication, though in practice it is only linked to from within the authenticated layout.
 
 ```csharp
 HttpContext.Session.Clear();
@@ -108,6 +112,42 @@ return RedirectToAction(nameof(Login));
 ```
 
 **On success:** Redirects to `GET /Acceso/Login`.
+
+---
+
+### GET /Acceso/Registro
+
+Returns an immediate redirect to `GET /Acceso/Login`. Self-registration is disabled in the application; the route exists as a stub to handle any inbound link or form that targets `/Acceso/Registro`.
+
+**Authorization:** Public (no `[Authorize]` attribute).
+
+```csharp
+[HttpGet]
+public IActionResult Registro()
+{
+    return RedirectToAction(nameof(Login));
+}
+```
+
+---
+
+### POST /Acceso/Registro
+
+Also redirects immediately to `GET /Acceso/Login`. The `UsuarioVM` model parameter is accepted by the binder but the body is never read or processed. New user accounts must be created by an administrator through the user management module.
+
+**Authorization:** Public (no `[Authorize]` attribute).
+
+```csharp
+[HttpPost]
+public IActionResult Registro(UsuarioVM usuarioVM)
+{
+    return RedirectToAction(nameof(Login));
+}
+```
+
+<Note>
+  Both `GET` and `POST /Acceso/Registro` are intentional no-op stubs. If you navigate to `/Acceso/Registro` directly or submit a registration form, you will be redirected to the login page without any feedback message.
+</Note>
 
 ---
 

@@ -41,7 +41,7 @@ Loads the new-sale form. Populates `ViewBag.Clientes` with every client whose `I
 
 Creates a new sale inside a database transaction. Resolves or creates the appropriate client record depending on `tipoComprobante`, auto-generates a correlative voucher number, decrements product stock for each line item, and persists the `Venta` together with its `DetalleVenta` collection in a single `SaveChangesAsync` call.
 
-**Authorization:** `Administrador`, `Gerente`, `Cajero`.
+**Authorization:** `Administrador`, `Gerente`, `Cajero`. Decorated with `[ValidateAntiForgeryToken]` — the form must include a valid anti-forgery token or the request is rejected with a `400 Bad Request`.
 
 <ParamField body="productoIds" type="int[]" required>
   Array of product IDs to include in the sale. Must not be empty and must have the same length as `cantidades` and `precios`.
